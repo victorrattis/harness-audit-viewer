@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Editores / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Segredos e configuração local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Capturas de sessão não sanitizadas
+# (mantenha em example/ apenas o que já passou pela sanitização)
+*.raw.json
+scratch/
+tmp/

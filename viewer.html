@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode · Audit Viewer</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#151821; --panel2:#1b1f2a; --panel3:#212633;
+  --border:#2a3040; --text:#e6e9ef; --muted:#8b94a7; --faint:#5c657a;
+  --accent:#7aa2f7; --green:#9ece6a; --yellow:#e0af68; --red:#f7768e;
+  --purple:#bb9af7; --cyan:#7dcfff; --orange:#ff9e64;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+html[data-theme="light"]{
+  --bg:#f6f7f9; --panel:#fff; --panel2:#f0f2f5; --panel3:#e7eaf0;
+  --border:#d8dde6; --text:#1a1d23; --muted:#5c657a; --faint:#8b94a7;
+  --accent:#2f6feb; --green:#1a7f37; --yellow:#9a6700; --red:#cf222e;
+  --purple:#8250df; --cyan:#0969da; --orange:#bc4c00;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 var(--sans);overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:5px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- layout ---------- */
+#app{display:grid;grid-template-rows:48px 1fr;height:100%}
+header{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--border)}
+header .logo{font-weight:700;letter-spacing:-.2px;white-space:nowrap}
+header .logo span{color:var(--accent)}
+header .sep{width:1px;height:22px;background:var(--border)}
+header select,header input{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  border-radius:6px;padding:5px 8px;font:inherit;outline:none}
+header input:focus,header select:focus{border-color:var(--accent)}
+header .grow{flex:1}
+.btn{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+
+#main{display:grid;grid-template-columns:290px 1fr;min-height:0}
+#side{background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;min-height:0}
+#content{overflow-y:auto;min-height:0;padding:18px 22px 80px}
+
+/* ---------- sidebar ---------- */
+.sidehead{padding:12px 14px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);z-index:2}
+.sidehead h3{margin:0 0 8px;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--faint)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.stat{font-size:12px}
+.stat b{display:block;font-size:15px;font-weight:600;font-family:var(--mono)}
+.stat span{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
+.turnlist{padding:6px}
+.turnitem{display:block;width:100%;text-align:left;padding:9px 10px;border-radius:8px;border:1px solid transparent;margin-bottom:3px}
+.turnitem:hover{background:var(--panel2)}
+.turnitem.active{background:var(--panel3);border-color:var(--accent)}
+.turnitem .r1{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+.turnitem .num{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600}
+.turnitem .ttl{flex:1;font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.turnitem .r2{display:flex;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+.turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
+
+/* ---------- badges / chips ---------- */
+.dot{width:7px;height:7px;border-radius:50%;flex:none}
+.dot.ok{background:var(--green)} .dot.err{background:var(--red)}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 7px;border-radius:5px;
+  background:var(--panel3);font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.chip.accent{color:var(--accent)} .chip.green{color:var(--green)} .chip.yellow{color:var(--yellow)}
+.chip.red{color:var(--red)} .chip.purple{color:var(--purple)} .chip.cyan{color:var(--cyan)}
+.chip.orange{color:var(--orange)}
+.chip.solid{background:color-mix(in srgb,currentColor 18%,transparent)}
+
+/* ---------- turn header ---------- */
+.thead{margin-bottom:16px}
+.thead h1{margin:0 0 8px;font-size:20px;font-weight:650;letter-spacing:-.3px;display:flex;align-items:center;gap:10px}
+.metarow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tokbar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:14px 0 7px;background:var(--panel3)}
+.tokbar i{display:block;height:100%}
+.toklegend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.toklegend b{color:var(--text);font-weight:600}
+.toklegend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+
+/* ---------- tabs ---------- */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:18px 0 16px}
+.tab{padding:8px 14px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab .cnt{font-family:var(--mono);font-size:10.5px;opacity:.65;margin-left:5px}
+
+/* ---------- cards / messages ---------- */
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden}
+.card>summary,.chead{display:flex;align-items:center;gap:9px;padding:10px 13px;cursor:pointer;list-style:none;user-select:none}
+.card>summary::-webkit-details-marker{display:none}
+.card>summary:hover{background:var(--panel2)}
+.card>summary .caret{color:var(--faint);font-size:10px;transition:transform .12s;flex:none}
+.card[open]>summary .caret{transform:rotate(90deg)}
+.card .who{font-weight:650;font-size:12.5px;letter-spacing:.2px}
+.card .grow{flex:1}
+.cbody{padding:0 13px 13px;border-top:1px solid var(--border);padding-top:12px}
+
+.msg.user{border-left:3px solid var(--cyan)}
+.msg.assistant{border-left:3px solid var(--purple)}
+.msg.system{border-left:3px solid var(--faint)}
+.msg.new{box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent)}
+
+.block{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel2)}
+.block:first-child{margin-top:0}
+.block>.bh{display:flex;align-items:center;gap:8px;padding:7px 11px;font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel3)}
+.block>.bb{padding:11px}
+.block.thinking>.bh{color:var(--orange)}
+.block.tool_use>.bh{color:var(--yellow)}
+.block.tool_result>.bh{color:var(--green)}
+.block.text>.bh{color:var(--cyan)}
+
+pre{margin:0;font-family:var(--mono);font-size:12.2px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-x:auto}
+pre.clip{max-height:280px;overflow-y:hidden;position:relative;
+  -webkit-mask-image:linear-gradient(#000 65%,transparent);mask-image:linear-gradient(#000 65%,transparent)}
+.expander{display:block;width:100%;text-align:center;font-size:11.5px;color:var(--accent);
+  padding:6px;background:var(--panel3);border-top:1px solid var(--border)}
+.expander:hover{background:var(--border)}
+.txt{white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.65}
+.txt code{font-family:var(--mono);font-size:12.2px;background:var(--panel3);padding:1px 5px;border-radius:4px}
+.txt pre.code{background:var(--panel3);padding:10px;border-radius:7px;margin:8px 0;white-space:pre}
+.txt strong{font-weight:650;color:var(--text)}
+mark{background:var(--yellow);color:#000;border-radius:2px}
+
+/* json syntax */
+.j-key{color:var(--cyan)} .j-str{color:var(--green)} .j-num{color:var(--orange)}
+.j-bool{color:var(--purple)} .j-null{color:var(--faint)}
+
+.copy{font-family:var(--mono);font-size:10.5px;color:var(--faint);padding:2px 6px;border:1px solid var(--border);border-radius:4px}
+.copy:hover{color:var(--accent);border-color:var(--accent)}
+
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--faint);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px}
+td.k{font-family:var(--mono);color:var(--muted);white-space:nowrap;width:1%}
+td.v{font-family:var(--mono);white-space:nowrap;text-align:right}
+td.wrap{word-break:break-word;white-space:normal}
+
+/* ---------- stream ---------- */
+.ev{display:flex;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;align-items:flex-start}
+.ev:hover{background:var(--panel2)}
+.ev .i{color:var(--faint);width:34px;flex:none;text-align:right}
+.ev .t{width:172px;flex:none}
+.ev .d{flex:1;color:var(--muted);white-space:pre-wrap;word-break:break-word}
+.ev.message_start .t,.ev.message_stop .t{color:var(--purple)}
+.ev.content_block_start .t,.ev.content_block_stop .t{color:var(--cyan)}
+.ev.content_block_delta .t{color:var(--faint)}
+.ev.message_delta .t{color:var(--yellow)}
+.ev.ping .t{color:var(--faint);opacity:.5}
+
+/* ---------- overview chart ---------- */
+.chart{display:flex;align-items:flex-end;gap:8px;height:170px;padding:12px;background:var(--panel);
+  border:1px solid var(--border);border-radius:10px;margin-bottom:14px}
+.bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:2px;cursor:pointer;position:relative}
+.bar:hover{opacity:.8}
+.bar i{display:block;border-radius:2px 2px 0 0}
+.bar .lbl{font-family:var(--mono);font-size:10px;color:var(--faint);text-align:center;margin-top:4px}
+#content h3{margin:22px 0 10px;font-size:12px;letter-spacing:.9px;text-transform:uppercase;color:var(--faint);font-weight:600}
+.notebox{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--yellow);
+  border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.6}
+.notebox b{color:var(--yellow)}
+.foot{font-size:11.5px;color:var(--faint);margin:-6px 0 16px;line-height:1.6}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
+.kpi b{display:block;font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.5px}
+.kpi span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+
+/* ---------- dropzone ---------- */
+#drop{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
+#drop .box{max-width:560px;text-align:center;padding:44px;border:2px dashed var(--border);border-radius:16px}
+#drop.over .box{border-color:var(--accent);background:var(--panel)}
+#drop h2{margin:0 0 8px;font-size:22px}
+#drop p{color:var(--muted);margin:0 0 20px;font-size:13.5px}
+#drop code{font-family:var(--mono);background:var(--panel2);padding:2px 7px;border-radius:5px;font-size:12.5px}
+.hint{color:var(--faint);font-size:11.5px;margin-top:18px;line-height:1.8}
+kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px solid var(--border);
+  border-radius:4px;padding:1px 5px}
+.empty{color:var(--muted);text-align:center;padding:40px;font-size:13px}
+</style>
+</head>
+<body>
+
+<div id="app" hidden>
+  <header>
+    <div class="logo">Open<span>Code</span> · Audit</div>
+    <div class="sep"></div>
+    <select id="sessionSel" title="Sessão"></select>
+    <input id="search" type="search" placeholder="Buscar no conteúdo dos turnos…" style="width:280px">
+    <div class="grow"></div>
+    <button class="btn" id="themeBtn" title="Alternar tema">◐</button>
+    <button class="btn" id="loadBtn">Abrir pasta…</button>
+  </header>
+  <div id="main">
+    <aside id="side"></aside>
+    <section id="content"></section>
+  </div>
+</div>
+
+<div id="drop">
+  <div class="box">
+    <h2>Visualizador de logs de auditoria</h2>
+    <p>Arraste aqui a pasta com os logs (a raiz do audit, ou uma sessão), ou selecione-a abaixo.</p>
+    <button class="btn" id="pickBtn" style="padding:9px 18px">Selecionar pasta…</button>
+    <input type="file" id="fileInput" webkitdirectory directory multiple hidden>
+    <div class="hint">
+      Tudo roda localmente no navegador — nenhum dado sai da máquina.<br>
+      Alternativa: <code>python3 -m http.server 8000</code> na pasta e abrir
+      <code>localhost:8000/viewer.html</code> (carrega sozinho).<br>Formatos: OpenCode (stream SSE) e harness-audit (resposta final).
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   Estado
+   ========================================================================= */
+const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupDeltas: true };
+const $ = s => document.querySelector(s);
+const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const nf = n => (n ?? 0).toLocaleString('pt-BR');
+const money = n => n == null ? '\u2014' : '$' + n.toFixed(4);
+const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
+const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
+
+/* =========================================================================
+   Preços (USD por 1M tokens). Cache read = 10% do input, cache write 5m = 125%.
+   Usado apenas quando o log não traz estimated_cost_usd por turno.
+   ========================================================================= */
+const PRICES = {
+  'claude-opus-5':      { in: 15,  out: 75 },
+  'claude-opus-4':      { in: 15,  out: 75 },
+  'claude-sonnet-5':    { in: 3,   out: 15 },
+  'claude-sonnet-4':    { in: 3,   out: 15 },
+  'claude-3-7-sonnet':  { in: 3,   out: 15 },
+  'claude-3-5-sonnet':  { in: 3,   out: 15 },
+  'claude-haiku-4-5':   { in: 1,   out: 5 },
+  'claude-3-5-haiku':   { in: 0.8, out: 4 },
+  'claude-3-haiku':     { in: 0.25,out: 1.25 },
+  'claude-fable-5':     { in: 0.8, out: 2.4 },
+};
+function priceOf(model) {
+  let best = null;
+  for (const k in PRICES) if (model && model.startsWith(k) && (!best || k.length > best.length)) best = k;
+  return best ? PRICES[best] : null;
+}
+function estimateCost(model, u) {
+  const p = priceOf(model); if (!p) return null;
+  return ((u.input || 0) * p.in + (u.output || 0) * p.out
+        + (u.cache_read || 0) * p.in * 0.1 + (u.cache_write || 0) * p.in * 1.25) / 1e6;
+}
+
+/* =========================================================================
+   Carregamento (drag&drop / picker / http auto)
+   ========================================================================= */
+/** Normaliza os dois formatos de log conhecidos para uma forma canônica.
+ *  A) "stream"  — OpenCode: {turn, model, request:{method,url,headers,body}, response:{status,events,raw}, usage}
+ *  B) "final"   — harness-audit: {request:<body>, response:<mensagem final da API>}
+ */
+function normalizeTurn(raw, fileName, mtime) {
+  const m = /turn[_-]?(\d+)/i.exec(fileName);
+  const num = raw.turn ?? (m ? +m[1] : 0);
+
+  if (raw.request && raw.request.body) return { ...raw, turn: num, _format: 'stream' };
+
+  const body = raw.request ?? {};
+  const res = raw.response ?? {};
+  const u = res.usage ?? {};
+  const usage = {
+    input: u.input_tokens ?? 0,
+    output: u.output_tokens ?? 0,
+    cache_read: u.cache_read_input_tokens ?? 0,
+    cache_write: u.cache_creation_input_tokens ?? 0,
+    reasoning: u.output_tokens_details?.thinking_tokens ?? 0,
+  };
+  usage.total = usage.input + usage.output + usage.cache_read + usage.cache_write;
+  const model = res.model || body.model;
+  return {
+    turn: num,
+    provider: 'anthropic',
+    model,
+    session: res.id ?? null,
+    started_at: mtime ? new Date(mtime).toISOString() : null,
+    _approxTime: !!mtime,
+    elapsed_seconds: null,                       // não registrado neste formato
+    request: { method: null, url: null, headers: null, body },
+    response: {
+      status: res.error ? 500 : null,   // este formato não registra o código HTTP
+      headers: null, bytes: null, events: null, raw: null,
+      content: res.content ?? [],
+      stop_reason: res.stop_reason ?? null,
+      stop_details: res.stop_details ?? null,
+      id: res.id ?? null,
+      error: res.error ?? null,
+      service_tier: u.service_tier ?? null,
+      inference_geo: u.inference_geo ?? null,
+      cache_5m: u.cache_creation?.ephemeral_5m_input_tokens ?? null,
+      cache_1h: u.cache_creation?.ephemeral_1h_input_tokens ?? null,
+    },
+    usage,
+    estimated_cost_usd: estimateCost(model, usage),
+    _estimated: true,
+    _format: 'final',
+  };
+}
+
+function ingest(files) {                       // files: [{path, text, mtime}]
+  const map = new Map();
+  for (const f of files) {
+    if (!f.path.endsWith('.json')) continue;
+    let data; try { data = JSON.parse(f.text); } catch { continue; }
+    const parts = f.path.split('/').filter(Boolean);
+    const name = parts.pop();
+    if (name === 'latest.json') continue;
+    const sid = parts.pop() || 'sessão';
+    if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
+    if (name === 'summary.json') map.get(sid).summary = data;
+    else if (data && (data.turn != null || data.request)) {
+      try { map.get(sid).turns.push(normalizeTurn(data, name, f.mtime)); }
+      catch (e) { console.warn('turno ignorado:', f.path, e); }
+    }
+  }
+  const sessions = [...map.values()].filter(s => s.turns.length);
+  sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
+  sessions.sort((a, b) => b.id.localeCompare(a.id));
+  if (!sessions.length) { alert('Nenhum log válido encontrado nessa pasta.'); return; }
+  S.sessions = sessions; S.sid = sessions[0].id; S.sel = 'overview';
+  $('#drop').hidden = true; $('#app').hidden = false;
+  renderSessionSelect(); render();
+}
+
+async function readEntry(entry, out, base) {
+  if (entry.isFile) {
+    const file = await new Promise(r => entry.file(r));
+    if (file.name.endsWith('.json')) out.push({ path: base + entry.name, text: await file.text(), mtime: file.lastModified });
+  } else if (entry.isDirectory) {
+    const rd = entry.createReader(); let batch;
+    do {
+      batch = await new Promise(r => rd.readEntries(r, () => r([])));
+      for (const e of batch) await readEntry(e, out, base + entry.name + '/');
+    } while (batch.length);
+  }
+}
+
+const dz = $('#drop');
+['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
+dz.addEventListener('drop', async e => {
+  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const out = [];
+  for (const en of entries) await readEntry(en, out, '');
+  ingest(out);
+});
+$('#pickBtn').onclick = $('#loadBtn').onclick = () => $('#fileInput').click();
+$('#fileInput').onchange = async e => {
+  const out = [];
+  for (const f of e.target.files) if (f.name.endsWith('.json')) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
+  ingest(out);
+};
+
+// auto-load quando servido por http
+(async function auto() {
+  if (!location.protocol.startsWith('http')) return;
+  let files = null;
+  const out = [];
+  const enc = p => p.split('/').map(encodeURIComponent).join('/');
+  async function walk(dir, depth) {             // varre até 3 níveis (ex.: example/<sessão>/)
+    if (depth > 3) return;
+    const idx = await (await fetch('./' + enc(dir))).text();
+    for (const m of idx.matchAll(/href="([^"?/]+\.json)"/g)) {
+      const fn = decodeURIComponent(m[1]);
+      const r = await fetch('./' + enc(dir + fn));
+      const lm = r.headers.get('last-modified');
+      out.push({ path: dir + fn, text: await r.text(), mtime: lm ? Date.parse(lm) : null });
+    }
+    for (const m of idx.matchAll(/href="([^"?/]+)\/"/g)) {
+      const d = decodeURIComponent(m[1]);
+      if (d.startsWith('.') || d === 'node_modules') continue;
+      await walk(dir + d + '/', depth + 1);
+    }
+  }
+  try { await walk('', 1); if (out.length) files = out; }
+  catch (e) { console.warn('auto-load indisponível:', e); return; }
+  if (files) ingest(files);
+})();
+
+/* =========================================================================
+   Helpers de leitura dos turnos
+   ========================================================================= */
+const session = () => S.sessions.find(s => s.id === S.sid);
+const turns = () => session()?.turns ?? [];
+
+/** Reconstrói a resposta do assistente a partir dos eventos SSE. */
+function rebuild(turn) {
+  const evs = turn.response?.events;
+  if (!evs) {                                  // formato "final": conteúdo já vem pronto
+    return {
+      blocks: turn.response?.content ?? [],
+      start: null, stop: null, streamed: false,
+      delta: { delta: { stop_reason: turn.response?.stop_reason ?? null } },
+    };
+  }
+  const blocks = []; let start = null, delta = null, stop = null;
+  for (const e of evs) {
+    if (e.type === 'message_start') start = e.message;
+    else if (e.type === 'content_block_start') blocks[e.index] = { ...e.content_block, _json: '' };
+    else if (e.type === 'content_block_delta') {
+      const b = blocks[e.index] ||= { type: 'text', text: '', _json: '' };
+      const d = e.delta;
+      if (d.type === 'text_delta') b.text = (b.text || '') + d.text;
+      else if (d.type === 'thinking_delta') b.thinking = (b.thinking || '') + d.thinking;
+      else if (d.type === 'input_json_delta') b._json += d.partial_json;
+      else if (d.type === 'signature_delta') b.signature = (b.signature || '') + d.signature;
+    }
+    else if (e.type === 'message_delta') delta = e;
+    else if (e.type === 'message_stop') stop = e;
+  }
+  for (const b of blocks) if (b && b.type === 'tool_use' && b._json) { try { b.input = JSON.parse(b._json); } catch {} }
+  return { blocks: blocks.filter(Boolean), start, delta, stop, streamed: true };
+}
+
+/** Estatísticas de contexto do request. */
+function ctxStats(turn) {
+  const body = turn.request?.body ?? {};
+  const sys = Array.isArray(body.system) ? body.system : body.system ? [{ text: body.system }] : [];
+  const sysChars = sys.reduce((a, s) => a + (s.text || '').length, 0);
+  const msgChars = JSON.stringify(body.messages ?? []).length;
+  const toolChars = JSON.stringify(body.tools ?? []).length;
+  return { sys, sysChars, msgChars, toolChars, tools: body.tools ?? [], messages: body.messages ?? [] };
+}
+
+/* =========================================================================
+   Render: sidebar
+   ========================================================================= */
+/** Totais da sessão calculados a partir dos turnos (funciona nos dois formatos).
+ *  summary.json é usado só para o que os turnos não registram (ex.: duração). */
+function sessionTotals(s) {
+  const sum = s.summary ?? {};
+  const add = k => s.turns.reduce((a, t) => a + (t.usage?.[k] ?? 0), 0);
+  const elapsed = s.turns.some(t => t.elapsed_seconds != null)
+    ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
+    : (sum.elapsed_seconds ?? null);
+  const costs = s.turns.map(t => t.estimated_cost_usd);
+  return {
+    turns: s.turns.length,
+    errors: s.turns.filter(t => t.response?.status != null && t.response.status >= 400).length,
+    input: add('input'), output: add('output'),
+    cache_read: add('cache_read'), cache_write: add('cache_write'), reasoning: add('reasoning'),
+    total_tokens: add('total'),
+    estimated_cost_usd: costs.every(c => c == null) ? (sum.estimated_cost_usd ?? null)
+                        : costs.reduce((a, c) => a + (c ?? 0), 0),
+    elapsed_seconds: elapsed,
+    elapsed_approx: !s.turns.some(t => t.elapsed_seconds != null) && elapsed != null,
+    estimated: s.turns.some(t => t._estimated),
+    note: sum.note ?? null,
+  };
+}
+
+function renderSessionSelect() {
+  const sel = $('#sessionSel');
+  sel.innerHTML = S.sessions.map(s =>
+    `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turnos</option>`).join('');
+  sel.value = S.sid;
+  sel.onchange = () => { S.sid = sel.value; S.sel = 'overview'; render(); };
+}
+
+function renderSide() {
+  const s = session(); const totals = sessionTotals(s);
+  const side = $('#side'); side.innerHTML = '';
+
+  const head = el('div', 'sidehead');
+  head.innerHTML = `<h3>Sessão</h3>
+    <div class="stats">
+      <div class="stat"><b>${nf(totals.turns)}</b><span>Turnos</span></div>
+      <div class="stat"><b style="color:${totals.errors ? 'var(--red)' : 'var(--green)'}">${nf(totals.errors)}</b><span>Erros</span></div>
+      <div class="stat"><b>${nf(totals.total_tokens)}</b><span>Tokens</span></div>
+      <div class="stat"><b>${money(totals.estimated_cost_usd)}</b><span>Custo${totals.estimated ? " calc." : " est."}</span></div>
+      <div class="stat"><b>${totals.elapsed_approx ? '~' : ''}${secs(totals.elapsed_seconds)}</b><span>Duração</span></div>
+      <div class="stat"><b>${nf(totals.cache_read)}</b><span>Cache read</span></div>
+    </div>`;
+  side.append(head);
+
+  const list = el('div', 'turnlist');
+  const ov = el('button', 'turnitem overview' + (S.sel === 'overview' ? ' active' : ''));
+  ov.innerHTML = `<div class="r1"><span class="num">▤</span><span class="ttl">Visão geral da sessão</span></div>`;
+  ov.onclick = () => { S.sel = 'overview'; render(); };
+  list.append(ov);
+
+  const q = S.q.toLowerCase();
+  for (const t of turns()) {
+    if (q && !JSON.stringify(t).toLowerCase().includes(q)) continue;
+    const ok = (t.response?.status ?? 0) < 400;
+    const b = el('button', 'turnitem' + (S.sel === t.turn ? ' active' : ''));
+    b.innerHTML = `
+      <div class="r1">
+        <span class="dot ${ok ? 'ok' : 'err'}"></span>
+        <span class="num">#${String(t.turn).padStart(2, '0')}</span>
+        <span class="ttl">${esc(turnLabel(t))}</span>
+      </div>
+      <div class="r2">
+        <span>${secs(t.elapsed_seconds)}</span>
+        <span>${nf(t.usage?.total ?? 0)} tk</span>
+        <span>${money(t.estimated_cost_usd)}</span>
+      </div>`;
+    b.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
+    list.append(b);
+  }
+  if (list.children.length === 1) list.append(el('div', 'empty', 'Nenhum turno corresponde à busca.'));
+  side.append(list);
+}
+
+/** Rótulo curto do turno: ferramentas chamadas, ou início do texto. */
+function turnLabel(t) {
+  const r = rebuild(t);
+  const tools = r.blocks.filter(b => b.type === 'tool_use').map(b => b.name);
+  if (tools.length) return tools.join(', ');
+  const txt = r.blocks.find(b => b.type === 'text')?.text;
+  if (txt) return txt.slice(0, 60).replace(/\s+/g, ' ');
+  const th = r.blocks.find(b => b.type === 'thinking');
+  return th ? 'raciocínio' : 'resposta';
+}
+
+/* =========================================================================
+   Render: conteúdo
+   ========================================================================= */
+function render() {
+  renderSide();
+  const c = $('#content'); c.innerHTML = '';
+  if (S.sel === 'overview') { c.append(renderOverview()); return; }
+  const t = turns().find(x => x.turn === S.sel);
+  if (!t) return c.append(el('div', 'empty', 'Turno não encontrado.'));
+  c.append(renderTurnHead(t));
+  c.append(renderTabs(t));
+  c.append(renderTabBody(t));
+  c.scrollTop = 0;
+  requestAnimationFrame(syncExpanders);
+}
+
+/* ---------- visão geral ---------- */
+function renderOverview() {
+  const s = session(); const wrap = el('div');
+  const tot2 = sessionTotals(s);
+  const models = [...new Set(s.turns.map(t => t.model).filter(Boolean))];
+  const streamed = s.turns.some(t => t._format === 'stream');
+  wrap.append(el('div', 'thead', `<h1>Visão geral</h1>
+    <div class="metarow">
+      <span class="chip accent solid">${esc(s.id)}</span>
+      <span class="chip">${esc(s.turns[0]?.provider ?? '—')}</span>
+      ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
+      <span class="chip">${s.turns[0]?._approxTime ? '~' : ''}início ${esc(fmtTime(s.turns[0]?.started_at))}</span>
+      <span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log com stream SSE' : 'log de resposta final'}</span>
+    </div>`));
+  if (tot2.note) wrap.append(el('div', 'notebox', '<b>Nota do summary.json:</b> ' + esc(tot2.note)));
+
+  const K = (v, l, col) => `<div class="kpi"><b${col ? ` style="color:${col}"` : ''}>${v}</b><span>${l}</span></div>`;
+  const tot = s.turns.reduce((a, t) => ({
+    i: a.i + (t.usage?.input ?? 0), o: a.o + (t.usage?.output ?? 0),
+    cr: a.cr + (t.usage?.cache_read ?? 0), cw: a.cw + (t.usage?.cache_write ?? 0),
+    r: a.r + (t.usage?.reasoning ?? 0),
+  }), { i: 0, o: 0, cr: 0, cw: 0, r: 0 });
+  const cacheRate = (tot.cr + tot.i) ? (tot.cr / (tot.cr + tot.i) * 100) : 0;
+
+  wrap.append(el('div', 'grid2',
+    K(nf(tot2.turns), 'Turnos') +
+    K(money(tot2.estimated_cost_usd), tot2.estimated ? 'Custo calculado*' : 'Custo estimado', 'var(--green)') +
+    K(nf(tot2.total_tokens), 'Tokens totais') +
+    K((tot2.elapsed_approx ? '~' : '') + secs(tot2.elapsed_seconds),
+       tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
+    K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache', 'var(--cyan)') +
+    K(nf(tot2.errors), 'Erros', (tot2.errors ? 'var(--red)' : 'var(--green)'))
+  ));
+  if (tot2.estimated) wrap.append(el('div', 'foot',
+    '* o log não traz custo por turno; calculado com a tabela de preços embutida no viewer '
+    + `(${esc(models.join(', '))}).`));
+
+  // gráfico de tokens por turno
+  wrap.append(el('h3', null, 'Tokens por turno'));
+  const max = Math.max(...s.turns.map(t => t.usage?.total ?? 0), 1);
+  const chart = el('div', 'chart');
+  for (const t of s.turns) {
+    const u = t.usage ?? {};
+    const bar = el('div', 'bar');
+    const h = p => (p / max * 132) + 'px';
+    bar.innerHTML =
+      `<i style="height:${h(u.output ?? 0)};background:var(--purple)" title="output ${nf(u.output)}"></i>` +
+      `<i style="height:${h(u.input ?? 0)};background:var(--accent)" title="input ${nf(u.input)}"></i>` +
+      `<i style="height:${h(u.cache_write ?? 0)};background:var(--yellow)" title="cache write ${nf(u.cache_write)}"></i>` +
+      `<i style="height:${h(u.cache_read ?? 0)};background:var(--cyan)" title="cache read ${nf(u.cache_read)}"></i>` +
+      `<div class="lbl">#${t.turn}</div>`;
+    bar.title = `Turno ${t.turn} · ${nf(u.total)} tokens · ${money(t.estimated_cost_usd)}`;
+    bar.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
+    chart.append(bar);
+  }
+  wrap.append(chart);
+  wrap.append(el('div', 'toklegend',
+    `<span><em style="background:var(--cyan)"></em>cache read <b>${nf(tot.cr)}</b></span>
+     <span><em style="background:var(--yellow)"></em>cache write <b>${nf(tot.cw)}</b></span>
+     <span><em style="background:var(--accent)"></em>input <b>${nf(tot.i)}</b></span>
+     <span><em style="background:var(--purple)"></em>output <b>${nf(tot.o)}</b></span>`));
+
+  // tabela por turno
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th><th>Msgs</th>
+      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Tempo</th><th>Custo</th><th>Fim</th></tr></thead>`;
+  const tb = el('tbody');
+  for (const t of s.turns) {
+    const u = t.usage ?? {};
+    const st = t.response?.status; const ok = st == null || st < 400;
+    const tr = el('tr');
+    tr.style.cursor = 'pointer';
+    tr.innerHTML = `<td class="k">#${t.turn}</td><td style="white-space:nowrap">${esc(t.model)}</td>
+      <td>${esc(turnLabel(t))}</td><td class="v">${(t.request?.body?.messages ?? []).length}</td>
+      <td class="v">${nf(u.input)}</td><td class="v" style="color:var(--cyan)">${nf(u.cache_read)}</td>
+      <td class="v" style="color:var(--yellow)">${nf(u.cache_write)}</td>
+      <td class="v" style="color:var(--purple)">${nf(u.output)}</td>
+      <td class="v">${secs(t.elapsed_seconds)}</td><td class="v">${money(t.estimated_cost_usd)}</td>
+      <td class="v" style="color:${ok ? 'var(--green)' : 'var(--red)'}">${st ?? esc(t.response?.stop_reason ?? '—')}</td>`;
+    tr.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
+    tb.append(tr);
+  }
+  tbl.append(tb);
+  const card = el('div', 'card'); card.style.padding = '4px 8px'; card.append(tbl);
+  wrap.append(el('h3', null, 'Turnos'), card);
+  return wrap;
+}
+
+const fmtTime = s => { if (!s) return '—'; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString('pt-BR'); };
+
+/* ---------- cabeçalho do turno ---------- */
+function renderTurnHead(t) {
+  const u = t.usage ?? {}; const st = t.response?.status; const ok = st == null || st < 400;
+  const r = rebuild(t);
+  const res = t.response ?? {};
+  const chip = (cls, txt) => txt == null ? '' : `<span class="chip ${cls}">${txt}</span>`;
+  const h = el('div', 'thead');
+  h.innerHTML = `<h1>Turno ${t.turn}
+      ${st != null ? `<span class="chip ${ok ? 'green' : 'red'} solid">HTTP ${st}</span>` : ''}
+      ${res.error ? '<span class="chip red solid">erro</span>' : ''}</h1>
+    <div class="metarow">
+      <span class="chip purple">${esc(t.model)}</span>
+      <span class="chip">${esc(t.provider)}</span>
+      ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
+      ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
+      ${chip('green', t.estimated_cost_usd != null ? money(t.estimated_cost_usd) + (t._estimated ? '*' : '') : null)}
+      <span class="chip">stop: ${esc(r.delta?.delta?.stop_reason ?? '—')}</span>
+      ${chip('', res.bytes != null ? bytes(res.bytes) : null)}
+      ${chip('', res.service_tier ? 'tier ' + esc(res.service_tier) : null)}
+      ${t.request?.body?.thinking?.type === 'enabled'
+        ? `<span class="chip orange solid">thinking ${nf(t.request.body.thinking.budget_tokens)}</span>` : ''}
+      ${chip('', t.request?.body?.max_tokens != null ? 'max_tokens ' + nf(t.request.body.max_tokens) : null)}
+      ${chip('cyan', r.streamed ? null : 'sem stream no log')}
+    </div>`;
+  const tot = (u.input ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0) + (u.output ?? 0) || 1;
+  const bar = el('div', 'tokbar');
+  bar.innerHTML =
+    `<i style="width:${(u.cache_read ?? 0)/tot*100}%;background:var(--cyan)"></i>
+     <i style="width:${(u.cache_write ?? 0)/tot*100}%;background:var(--yellow)"></i>
+     <i style="width:${(u.input ?? 0)/tot*100}%;background:var(--accent)"></i>
+     <i style="width:${(u.output ?? 0)/tot*100}%;background:var(--purple)"></i>`;
+  h.append(bar, el('div', 'toklegend',
+    `<span><em style="background:var(--cyan)"></em>cache read <b>${nf(u.cache_read)}</b></span>
+     <span><em style="background:var(--yellow)"></em>cache write <b>${nf(u.cache_write)}</b></span>
+     <span><em style="background:var(--accent)"></em>input <b>${nf(u.input)}</b></span>
+     <span><em style="background:var(--purple)"></em>output <b>${nf(u.output)}</b></span>
+     <span>reasoning <b>${nf(u.reasoning)}</b></span>
+     <span>total <b>${nf(u.total)}</b></span>`));
+  return h;
+}
+
+/* ---------- abas ---------- */
+function renderTabs(t) {
+  const c = ctxStats(t); const r = rebuild(t);
+  const defs = [
+    ['conv', 'Conversa', c.messages.length + r.blocks.length],
+    ['req', 'Request', null],
+    ['sys', 'System + Tools', c.tools.length],
+    ...(t.response?.events ? [['stream', 'Stream', t.response.events.length]] : []),
+    ['json', 'JSON bruto', null],
+  ];
+  if (!defs.some(d => d[0] === S.tab)) S.tab = 'conv';
+  const bar = el('div', 'tabs');
+  for (const [id, label, cnt] of defs) {
+    const b = el('button', 'tab' + (S.tab === id ? ' active' : ''),
+      esc(label) + (cnt != null ? `<span class="cnt">${cnt}</span>` : ''));
+    b.onclick = () => { S.tab = id; render(); };
+    bar.append(b);
+  }
+  return bar;
+}
+
+function renderTabBody(t) {
+  switch (S.tab) {
+    case 'req': return renderRequest(t);
+    case 'sys': return renderSystem(t);
+    case 'stream': return renderStream(t);
+    case 'json': return renderRaw(t);
+    default: return renderConversation(t);
+  }
+}
+
+/* ---------- aba: conversa ---------- */
+function renderConversation(t) {
+  const wrap = el('div');
+  const c = ctxStats(t);
+  const prev = turns().find(x => x.turn === t.turn - 1);
+  const prevLen = prev ? (prev.request?.body?.messages ?? []).length : 0;
+
+  if (c.sys.length) {
+    const d = el('details', 'card msg system');
+    d.innerHTML = `<summary><span class="caret">▶</span><span class="who" style="color:var(--faint)">SYSTEM</span>
+      <span class="grow"></span>
+      <span class="chip">${c.sys.length} bloco(s)</span>
+      <span class="chip">${nf(c.sysChars)} chars ≈ ${nf(Math.round(c.sysChars/4))} tk</span></summary>`;
+    const body = el('div', 'cbody');
+    c.sys.forEach((b, i) => body.append(blockCard('text', `system[${i}]${b.cache_control ? ' · cache_control' : ''}`, b.text)));
+    d.append(body); wrap.append(d);
+  }
+
+  c.messages.forEach((m, i) => wrap.append(messageCard(m, i, i >= prevLen && prevLen > 0)));
+
+  // resposta reconstruída
+  const r = rebuild(t);
+  const d = el('details', 'card msg assistant'); d.open = true;
+  d.innerHTML = `<summary><span class="caret">▶</span>
+    <span class="who" style="color:var(--purple)">ASSISTANT · resposta</span>
+    <span class="grow"></span>
+    <span class="chip ${r.streamed ? 'green' : 'cyan'} solid">${r.streamed ? '↩ reconstruída do stream' : '↩ resposta final'}</span>
+    <span class="chip">${r.blocks.length} bloco(s)</span>
+    <span class="chip">stop: ${esc(r.delta?.delta?.stop_reason ?? '—')}</span></summary>`;
+  const body = el('div', 'cbody');
+  if (!r.blocks.length) body.append(el('div', 'empty', 'Sem blocos de conteúdo na resposta.'));
+  r.blocks.forEach(b => body.append(renderBlock(b)));
+  d.append(body); wrap.append(d);
+  return wrap;
+}
+
+function messageCard(m, i, isNew) {
+  const role = m.role || '?';
+  const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
+  const kinds = [...new Set(blocks.map(b => b.type))];
+  const d = el('details', `card msg ${role}${isNew ? ' new' : ''}`);
+  const color = role === 'user' ? 'var(--cyan)' : 'var(--purple)';
+  d.innerHTML = `<summary><span class="caret">▶</span>
+    <span class="who" style="color:${color}">${esc(role.toUpperCase())}</span>
+    <span class="grow" style="color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(preview(blocks))}</span>
+    ${isNew ? '<span class="chip green solid">novo neste turno</span>' : ''}
+    <span class="chip">#${i}</span>
+    ${kinds.map(k => `<span class="chip ${k === 'tool_use' ? 'yellow' : k === 'tool_result' ? 'green' : ''}">${esc(k)}</span>`).join('')}</summary>`;
+  const body = el('div', 'cbody');
+  blocks.forEach(b => body.append(renderBlock(b)));
+  d.append(body);
+  return d;
+}
+
+function preview(blocks) {
+  for (const b of blocks) {
+    if (b.type === 'text' && b.text) return b.text.slice(0, 120).replace(/\s+/g, ' ');
+    if (b.type === 'tool_use') return `→ ${b.name}(${Object.keys(b.input ?? {}).join(', ')})`;
+    if (b.type === 'tool_result') return `← resultado (${String(b.content ?? '').length} chars)`;
+  }
+  return '';
+}
+
+function renderBlock(b) {
+  switch (b.type) {
+    case 'text':
+      return blockCard('text', 'text · ' + nf((b.text || '').length) + ' chars', b.text, true);
+    case 'thinking': {
+      if (!b.thinking && b.signature) {        // reenviado ao modelo apenas como assinatura
+        const c = el('div', 'block thinking');
+        c.append(el('div', 'bh', `<span>◇ thinking</span><span style="flex:1"></span>
+          <span class="chip">conteúdo não retido · assinatura ${nf(b.signature.length)} chars</span>`));
+        return c;
+      }
+      return blockCard('thinking', 'thinking · ' + nf((b.thinking || '').length) + ' chars', b.thinking);
+    }
+    case 'tool_use': {
+      const c = el('div', 'block tool_use');
+      c.append(el('div', 'bh', `<span>⚙ tool_use</span><b style="color:var(--yellow)">${esc(b.name)}</b>
+        <span class="grow" style="flex:1"></span>
+        ${b.caller?.type ? `<span class="chip">${esc(b.caller.type)}</span>` : ''}
+        <span class="chip">${esc(b.id ?? '')}</span>`));
+      c.append(preBody(jsonHTML(b.input ?? {}), true));
+      return c;
+    }
+    case 'tool_result': {
+      const txt = typeof b.content === 'string' ? b.content : JSON.stringify(b.content, null, 2);
+      const c = el('div', 'block tool_result');
+      c.append(el('div', 'bh', `<span>✓ tool_result</span>
+        <span style="flex:1"></span>
+        ${b.is_error ? '<span class="chip red solid">erro</span>' : ''}
+        <span class="chip">${nf(txt.length)} chars</span>
+        <span class="chip">${esc(b.tool_use_id ?? '')}</span>`));
+      c.append(preBody(highlight(esc(txt))));
+      return c;
+    }
+    default:
+      return blockCard(b.type || 'bloco', b.type || 'bloco', JSON.stringify(b, null, 2));
+  }
+}
+
+function blockCard(kind, title, text, rich) {
+  const c = el('div', 'block ' + kind);
+  c.append(el('div', 'bh', `<span>${esc(title)}</span>`));
+  c.append(preBody(rich ? md(String(text ?? '')) : highlight(esc(String(text ?? ''))), false, rich));
+  return c;
+}
+
+/** Corpo colapsável com botão "expandir". */
+function preBody(html, isJson, rich) {
+  const wrap = el('div');
+  const body = el('div', 'bb');
+  const pre = el('pre', 'clip', html);
+  if (rich) { pre.className = 'clip txt'; }
+  body.append(pre); wrap.append(body);
+  const raw = pre.textContent;
+  const btn = el('button', 'expander', 'expandir ▾');
+  pre.__btn = btn;                       // medido sob demanda por syncExpanders()
+  btn.onclick = () => {
+    const open = pre.classList.toggle('clip');
+    btn.textContent = open ? 'expandir ▾' : 'recolher ▴';
+  };
+  const bar = el('div');
+  bar.style.cssText = 'display:flex';
+  btn.style.flex = '1';
+  const cp = el('button', 'expander', 'copiar');
+  cp.style.cssText = 'flex:none;width:88px;border-left:1px solid var(--border)';
+  cp.onclick = () => { navigator.clipboard.writeText(raw); cp.textContent = 'copiado ✓'; setTimeout(() => cp.textContent = 'copiar', 1200); };
+  bar.append(btn, cp); wrap.append(bar);
+  return wrap;
+}
+
+/** Mede os <pre> já visíveis e remove o botão dos que não estouram a altura.
+ *  Feito sob demanda porque conteúdo dentro de <details> fechado mede 0. */
+function syncExpanders() {
+  for (const pre of $('#content').querySelectorAll('pre.clip')) {
+    if (pre.__checked || !pre.__btn || pre.offsetParent === null) continue;
+    pre.__checked = true;
+    if (pre.scrollHeight <= 285) { pre.classList.remove('clip'); pre.__btn.remove(); }
+  }
+}
+$('#content').addEventListener('toggle', () => requestAnimationFrame(syncExpanders), true);
+
+/* ---------- aba: request ---------- */
+function renderRequest(t) {
+  const wrap = el('div'); const rq = t.request ?? {}; const b = rq.body ?? {};
+  const res = t.response ?? {};
+  const kv = (obj, title) => {                 // omite chaves ausentes; some se ficar vazio
+    const rows = Object.entries(obj ?? {}).filter(([, v]) => v != null && v !== '');
+    if (!rows.length) return null;
+    const card = el('div', 'card');
+    card.append(el('div', 'chead', `<b>${esc(title)}</b>`));
+    const tb = el('table'); const body = el('tbody');
+    for (const [k, v] of rows)
+      body.innerHTML += `<tr><td class="k">${esc(k)}</td><td class="v wrap" style="text-align:left">${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`;
+    tb.append(body); card.append(tb); return card;
+  };
+  const add = c => { if (c) wrap.append(c); };
+  add(kv({ method: rq.method, url: rq.url, status: res.status, bytes: res.bytes,
+    message_id: res.id, session: t.session,
+    started_at: t.started_at ? fmtTime(t.started_at) + (t._approxTime ? '  (mtime do arquivo, aproximado)' : '') : null,
+    elapsed_seconds: t.elapsed_seconds, stop_reason: res.stop_reason,
+    service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Requisição / resposta'));
+  add(kv({ model: b.model, max_tokens: b.max_tokens, stream: b.stream,
+    thinking: b.thinking ? `${b.thinking.type} (budget ${b.thinking.budget_tokens})` : null,
+    temperature: b.temperature, mensagens: (b.messages ?? []).length, ferramentas: (b.tools ?? []).length }, 'Parâmetros'));
+  add(kv(rq.headers, 'Headers da requisição'));
+  add(kv(res.headers, 'Headers da resposta'));
+  add(kv({ ...t.usage, ...(res.cache_5m != null ? { cache_write_5m: res.cache_5m, cache_write_1h: res.cache_1h } : {}) }, 'Usage'));
+  if (t._estimated) wrap.append(el('div', 'foot',
+    '* custo não vem no log; calculado localmente a partir do modelo e do usage.'));
+  return wrap;
+}
+
+/* ---------- aba: system + tools ---------- */
+function renderSystem(t) {
+  const wrap = el('div'); const c = ctxStats(t);
+  c.sys.forEach((b, i) => {
+    const d = el('details', 'card'); d.open = c.sys.length === 1;
+    d.innerHTML = `<summary><span class="caret">▶</span><b>System prompt [${i}]</b>
+      <span style="flex:1"></span>
+      ${b.cache_control ? `<span class="chip cyan solid">cache_control: ${esc(b.cache_control.type)}</span>` : ''}
+      <span class="chip">${nf((b.text || '').length)} chars ≈ ${nf(Math.round((b.text || '').length / 4))} tk</span></summary>`;
+    const body = el('div', 'cbody'); body.append(preBody(md(b.text || ''), false, true));
+    d.append(body); wrap.append(d);
+  });
+  if (!c.tools.length) { wrap.append(el('div', 'empty', 'Nenhuma ferramenta enviada neste turno.')); return wrap; }
+  const head = el('div', 'card'); head.append(el('div', 'chead',
+    `<b>Ferramentas disponíveis</b><span style="flex:1"></span><span class="chip">${c.tools.length}</span><span class="chip">${nf(c.toolChars)} chars</span>`));
+  wrap.append(head);
+  for (const tool of c.tools) {
+    const d = el('details', 'card');
+    d.innerHTML = `<summary><span class="caret">▶</span>
+      <b style="color:var(--yellow);font-family:var(--mono);font-size:13px">${esc(tool.name)}</b>
+      <span class="grow" style="flex:1;color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc((tool.description || '').slice(0, 140))}</span>
+      <span class="chip">${Object.keys(tool.input_schema?.properties ?? {}).length} params</span></summary>`;
+    const body = el('div', 'cbody');
+    if (tool.description) body.append(blockCard('text', 'description', tool.description, true));
+    body.append(blockCard('tool_use', 'input_schema', JSON.stringify(tool.input_schema ?? {}, null, 2)));
+    d.append(body); wrap.append(d);
+  }
+  return wrap;
+}
+
+/* ---------- aba: stream ---------- */
+function renderStream(t) {
+  const wrap = el('div');
+  const events = t.response?.events ?? [];
+  const bar = el('div', 'card'); bar.style.padding = '10px 13px';
+  bar.innerHTML = `<label style="font-size:12.5px;cursor:pointer">
+    <input type="checkbox" id="grp" ${S.groupDeltas ? 'checked' : ''}> agrupar deltas consecutivos por bloco</label>
+    <span class="chip" style="float:right">${events.length} eventos</span>`;
+  wrap.append(bar);
+  bar.querySelector('#grp').onchange = e => { S.groupDeltas = e.target.checked; render(); };
+
+  const list = el('div', 'card');
+  let i = 0;
+  while (i < events.length) {
+    const e = events[i];
+    if (S.groupDeltas && e.type === 'content_block_delta') {
+      let j = i, acc = '', n = 0, kind = '';
+      while (j < events.length && events[j].type === 'content_block_delta' && events[j].index === e.index) {
+        const d = events[j].delta;
+        acc += d.text ?? d.thinking ?? d.partial_json ?? (d.signature ? '[signature]' : '');
+        kind = d.type; n++; j++;
+      }
+      list.append(evRow(i, `content_block_delta ×${n}`, `[${e.index}] ${kind}\n` + acc, 'content_block_delta'));
+      i = j; continue;
+    }
+    list.append(evRow(i, e.type, evSummary(e), e.type));
+    i++;
+  }
+  wrap.append(list);
+  return wrap;
+}
+
+function evRow(i, type, detail, cls) {
+  const r = el('div', 'ev ' + cls);
+  r.innerHTML = `<span class="i">${i}</span><span class="t">${esc(type)}</span>`;
+  const d = el('span', 'd'); d.textContent = detail; r.append(d);
+  return r;
+}
+
+function evSummary(e) {
+  switch (e.type) {
+    case 'message_start': {
+      const u = e.message?.usage ?? {};
+      return `${e.message?.id} · ${e.message?.model}\nin ${nf(u.input_tokens)} · cache_read ${nf(u.cache_read_input_tokens)} · cache_write ${nf(u.cache_creation_input_tokens)}`;
+    }
+    case 'content_block_start': return `[${e.index}] ${e.content_block?.type}` + (e.content_block?.name ? ` · ${e.content_block.name} (${e.content_block.id})` : '');
+    case 'content_block_stop': return `[${e.index}]`;
+    case 'content_block_delta': {
+      const d = e.delta;
+      return `[${e.index}] ${d.type}: ` + (d.text ?? d.thinking ?? d.partial_json ?? '[signature]');
+    }
+    case 'message_delta': return `stop_reason: ${e.delta?.stop_reason} · output ${nf(e.usage?.output_tokens)}`;
+    case 'ping': return '';
+    default: return JSON.stringify(e).slice(0, 300);
+  }
+}
+
+/* ---------- aba: json bruto ---------- */
+function renderRaw(t) {
+  const wrap = el('div');
+  const mk = (title, obj) => {
+    const d = el('details', 'card');
+    d.innerHTML = `<summary><span class="caret">▶</span><b>${esc(title)}</b></summary>`;
+    const body = el('div', 'cbody');
+    body.append(preBody(typeof obj === 'string' ? highlight(esc(obj)) : jsonHTML(obj)));
+    d.append(body); return d;
+  };
+  const full = mk('Turno completo (JSON, normalizado)', t); full.open = true;
+  wrap.append(full, mk('request.body', t.request?.body));
+  if (t.response?.content) wrap.append(mk('response.content', t.response.content));
+  if (t.response?.events) wrap.append(mk('response.events', t.response.events));
+  if (t.response?.raw) wrap.append(mk('response.raw (SSE bruto)', t.response.raw));
+  return wrap;
+}
+
+/* =========================================================================
+   Formatação de texto
+   ========================================================================= */
+function jsonHTML(obj) {
+  const s = esc(JSON.stringify(obj, null, 2));
+  return s
+    .replace(/(&quot;[^&]*?&quot;)(\s*:)/g, '<span class="j-key">$1</span>$2')
+    .replace(/:\s(&quot;[\s\S]*?&quot;)/g, ': <span class="j-str">$1</span>')
+    .replace(/:\s(-?\d+\.?\d*)/g, ': <span class="j-num">$1</span>')
+    .replace(/:\s(true|false)/g, ': <span class="j-bool">$1</span>')
+    .replace(/:\s(null)/g, ': <span class="j-null">$1</span>');
+}
+
+/** Markdown mínimo: fences, inline code, bold, headings. Entrada já escapada. */
+function md(raw) {
+  let s = esc(raw);
+  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre class="code">${c}</pre>`);
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/^(#{1,4})\s+(.+)$/gm, (_, h, txt) => `<strong style="font-size:${17 - h.length}px">${txt}</strong>`);
+  return highlight(s);
+}
+
+/** Destaca o termo de busca (não quebra tags). */
+function highlight(html) {
+  if (!S.q) return html;
+  const re = new RegExp('(' + S.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+  return html.replace(/>([^<]+)</g, (m, txt) => '>' + txt.replace(re, '<mark>$1</mark>') + '<')
+             .replace(/^([^<]+)/, m => m.replace(re, '<mark>$1</mark>'));
+}
+
+/* =========================================================================
+   Controles
+   ========================================================================= */
+let qt;
+$('#search').oninput = e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value.trim(); render(); }, 180); };
+$('#themeBtn').onclick = () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  document.documentElement.setAttribute('data-theme', cur === 'light' ? 'dark' : 'light');
+};
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  const list = turns().map(t => t.turn);
+  const at = list.indexOf(S.sel);
+  if (e.key === 'j' || e.key === 'ArrowDown') { S.sel = list[Math.min(at + 1, list.length - 1)] ?? list[0]; render(); }
+  else if (e.key === 'k' || e.key === 'ArrowUp') { if (at > 0) { S.sel = list[at - 1]; render(); } else { S.sel = 'overview'; render(); } }
+  else if (e.key === '/') { e.preventDefault(); $('#search').focus(); }
+  else if (['1','2','3','4','5'].includes(e.key)) { S.tab = ['conv','req','sys','stream','json'][+e.key - 1]; render(); }
+});
+</script>
+</body>
+</html>
