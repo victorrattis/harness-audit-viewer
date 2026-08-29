@@ -125,6 +125,14 @@ pre.clip{max-height:280px;overflow-y:hidden;position:relative;
 .txt pre.code{background:var(--panel3);padding:10px;border-radius:7px;margin:8px 0;white-space:pre}
 .txt strong{font-weight:650;color:var(--text)}
 mark{background:var(--yellow);color:#000;border-radius:2px}
+.txt ul,.txt ol{margin:5px 0;padding-left:22px}
+.txt li{margin:2px 0}
+.txt blockquote{margin:6px 0;padding:2px 0 2px 11px;border-left:2px solid var(--border);color:var(--muted)}
+.txt hr{border:none;border-top:1px solid var(--border);margin:11px 0}
+.txt a{color:var(--accent)}
+.txt del{color:var(--faint)}
+.txt .mdh{font-weight:650;color:var(--text);margin:11px 0 3px;letter-spacing:-.2px;line-height:1.35}
+.txt .mdh:first-child{margin-top:0}
 
 /* json syntax */
 .j-key{color:var(--cyan)} .j-str{color:var(--green)} .j-num{color:var(--orange)}
@@ -153,13 +161,7 @@ td.wrap{word-break:break-word;white-space:normal}
 .ev.message_delta .t{color:var(--yellow)}
 .ev.ping .t{color:var(--faint);opacity:.5}
 
-/* ---------- overview chart ---------- */
-.chart{display:flex;align-items:flex-end;gap:8px;height:170px;padding:12px;background:var(--panel);
-  border:1px solid var(--border);border-radius:10px;margin-bottom:14px}
-.bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;gap:2px;cursor:pointer;position:relative}
-.bar:hover{opacity:.8}
-.bar i{display:block;border-radius:2px 2px 0 0}
-.bar .lbl{font-family:var(--mono);font-size:10px;color:var(--faint);text-align:center;margin-top:4px}
+/* ---------- overview ---------- */
 #content h3{margin:22px 0 10px;font-size:12px;letter-spacing:.9px;text-transform:uppercase;color:var(--faint);font-weight:600}
 .notebox{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--yellow);
   border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.6}
@@ -169,6 +171,25 @@ td.wrap{word-break:break-word;white-space:normal}
 .kpi{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
 .kpi b{display:block;font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.5px}
 .kpi span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+
+/* ---------- composição do prompt / reuso ---------- */
+.stack{display:flex;height:28px;border-radius:7px;overflow:hidden;background:var(--panel3);margin:12px 0 8px}
+.stack i{display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden;white-space:nowrap;
+  font-family:var(--mono);font-size:11px;font-weight:700;color:#0b0d12}
+.reuse{display:flex;flex-wrap:wrap;gap:7px;align-items:center;background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;padding:11px 13px;margin-bottom:12px}
+.reuse.stable{border-left:3px solid var(--green)}
+.reuse.broke{border-left:3px solid var(--red)}
+.reuse .lead{font-weight:650;font-size:13px}
+.mini{height:6px;border-radius:3px;background:var(--panel3);overflow:hidden;width:100%;min-width:54px}
+.mini i{display:block;height:100%;background:var(--accent)}
+td.num{font-family:var(--mono);text-align:right;white-space:nowrap;width:1%}
+tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--panel2)}
+.card.tablecard{overflow-x:auto}
+tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
+.legend b{color:var(--text);font-weight:600}
+.legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
 
 /* ---------- dropzone ---------- */
 #drop{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
@@ -262,13 +283,21 @@ const API_LABEL = {
   'anthropic': 'anthropic · messages',
   'openai-chat': 'openai · chat.completions',
   'openai-responses': 'openai · responses',
+  'gemini': 'google · generateContent',
+  'bedrock': 'bedrock · converse',
+  'unknown': 'dialeto desconhecido',
 };
+// Dialetos que o viewer sabe desmontar sozinho (conversa, stream). Para os
+// demais ele usa o que o plugin já decodificou.
+const NATIVE_API = new Set(['anthropic', 'openai-chat', 'openai-responses']);
 const apiLabel = a => API_LABEL[a] ?? a ?? '—';
 
 /** Descobre o dialeto da API a partir do corpo/eventos: os logs do harness
  *  misturam Anthropic Messages, OpenAI Chat Completions e OpenAI Responses. */
 function detectApi(t) {
   const b = t.request?.body ?? {};
+  if (Array.isArray(b.contents)) return 'gemini';
+  if (b.toolConfig || b.inferenceConfig) return 'bedrock';
   if (Array.isArray(b.input) || b.instructions != null) return 'openai-responses';
   const ev = Array.isArray(t.response?.events) ? t.response.events : null;
   const e0 = ev ? ev.find(e => e && (e.type || e.choices || e.object)) : null;
@@ -324,15 +353,65 @@ function normMsg(m) {
   return { role: m.role ?? 'assistant', content: blocks };
 }
 
-/** Ferramentas nos três formatos → {name, description, input_schema}. */
+/** Um turno do Gemini: `contents[].parts[]`, com `model` no lugar de assistant. */
+function geminiMsg(c) {
+  const blocks = [];
+  for (const p of c.parts ?? []) {
+    if (typeof p.text === 'string')
+      blocks.push(p.thought ? { type: 'thinking', thinking: p.text } : { type: 'text', text: p.text });
+    else if (p.functionCall)
+      blocks.push({ type: 'tool_use', id: p.functionCall.id, name: p.functionCall.name, input: p.functionCall.args ?? {} });
+    else if (p.functionResponse) {
+      const r = p.functionResponse.response ?? {};
+      blocks.push({ type: 'tool_result', tool_use_id: p.functionResponse.id ?? p.functionResponse.name,
+                    content: textOf(r.output ?? r.result ?? r.content ?? r) });
+    }
+    else if (p.inlineData || p.fileData) blocks.push({ type: 'image', ...p });
+    // A assinatura do raciocínio volta ao modelo sem o texto, como na Anthropic.
+    else if (p.thoughtSignature) blocks.push({ type: 'thinking', thinking: '', signature: p.thoughtSignature });
+    else blocks.push(p);
+  }
+  return { role: c.role === 'model' ? 'assistant' : (c.role ?? 'user'), content: blocks };
+}
+
+/** Um turno do Bedrock Converse: blocos sem `type`, a chave é o tipo. */
+function bedrockMsg(m) {
+  const blocks = [];
+  for (const b of m.content ?? []) {
+    if (typeof b.text === 'string') blocks.push({ type: 'text', text: b.text });
+    else if (b.toolUse) blocks.push({ type: 'tool_use', id: b.toolUse.toolUseId, name: b.toolUse.name, input: b.toolUse.input ?? {} });
+    else if (b.toolResult)
+      blocks.push({ type: 'tool_result', tool_use_id: b.toolResult.toolUseId, is_error: b.toolResult.status === 'error',
+                    content: (b.toolResult.content ?? []).map(x => x.text ?? JSON.stringify(x.json ?? x, null, 2)).join('\n') });
+    else if (b.reasoningContent) blocks.push({ type: 'thinking', thinking: b.reasoningContent.reasoningText?.text ?? '' });
+    else if (b.image || b.document || b.video) blocks.push({ type: 'image', ...b });
+    else blocks.push(b);
+  }
+  return { role: m.role ?? 'user', content: blocks };
+}
+
+/** Ferramentas nos cinco formatos → {name, description, input_schema}. */
 function normTools(tools) {
-  return (tools ?? []).map(t => {
-    if (t.function) return { name: t.function.name, description: t.function.description,
-                             input_schema: t.function.parameters, _kind: t.type };
-    if (t.input_schema) return t;
-    if (t.parameters) return { name: t.name, description: t.description, input_schema: t.parameters, _kind: t.type };
-    return t;
-  });
+  const out = [];
+  for (const t of tools ?? []) {
+    // Gemini agrupa as declarações; Bedrock embrulha cada uma em toolSpec.
+    if (Array.isArray(t.functionDeclarations ?? t.function_declarations)) {
+      for (const d of t.functionDeclarations ?? t.function_declarations)
+        out.push({ name: d.name, description: d.description, input_schema: d.parameters ?? d.parametersJsonSchema });
+      continue;
+    }
+    if (t.toolSpec) {
+      out.push({ name: t.toolSpec.name, description: t.toolSpec.description,
+                 input_schema: t.toolSpec.inputSchema?.json ?? t.toolSpec.inputSchema });
+      continue;
+    }
+    if (t.function) out.push({ name: t.function.name, description: t.function.description,
+                               input_schema: t.function.parameters, _kind: t.type });
+    else if (t.input_schema) out.push(t);
+    else if (t.parameters) out.push({ name: t.name, description: t.description, input_schema: t.parameters, _kind: t.type });
+    else out.push(t);
+  }
+  return out;
 }
 
 /** Normaliza os formatos de log conhecidos para uma forma canônica.
@@ -344,8 +423,18 @@ function normalizeTurn(raw, fileName, mtime) {
   const num = raw.turn ?? (m ? +m[1] : 0);
 
   if (raw.request && raw.request.body) {
-    const t = { ...raw, turn: num, _format: 'stream' };
-    t._api = detectApi(t);
+    // O plugin passou a decodificar o prompt, a resposta e o custo ele mesmo.
+    // Quando esses campos vêm no log, eles mandam: são os números do provider,
+    // não uma releitura do viewer.
+    const decoded = !!(raw.prompt || raw.usage?.source || raw.cost);
+    const t = { ...raw, turn: num, _format: decoded ? 'audit2' : 'stream' };
+    const dialect = raw.prompt?.dialect;
+    t._api = dialect && (NATIVE_API.has(dialect) || API_LABEL[dialect]) ? dialect : detectApi(t);
+    t._native = NATIVE_API.has(t._api);
+    t.estimated_cost_usd = raw.cost?.estimated_usd ?? raw.estimated_cost_usd ?? null;
+    t.provider_cost_usd = raw.cost?.provider_usd ?? null;
+    t._estimated = !decoded && raw.estimated_cost_usd == null;
+    if (t._estimated) t.estimated_cost_usd = estimateCost(t.model, t.usage ?? {});
     return t;
   }
 
@@ -403,10 +492,17 @@ function ingest(files) {                       // files: [{path, text, mtime}]
     if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
     if (name === 'summary.json') map.get(sid).summary = data;
     else if (data && (data.turn != null || data.request)) {
-      try { map.get(sid).turns.push(normalizeTurn(data, name, f.mtime)); }
+      try {
+        const turn = normalizeTurn(data, name, f.mtime);
+        Object.defineProperty(turn, '_raw', { value: data, enumerable: false });
+        map.get(sid).turns.push(turn);
+      }
       catch (e) { console.warn('turno ignorado:', f.path, e); }
     }
   }
+  // Uma pasta, uma sessão. O plugin escreve `<run>/<sessão>/turn_*.json`, então
+  // a pasta que contém os turnos já é a unidade certa — agrupar por ela basta.
+  // A pasta do run só tem o resumo e nenhum turno; o filtro abaixo a descarta.
   const sessions = [...map.values()].filter(s => s.turns.length);
   sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
   sessions.sort((a, b) => b.id.localeCompare(a.id));
@@ -451,8 +547,8 @@ $('#fileInput').onchange = async e => {
   let files = null;
   const out = [];
   const enc = p => p.split('/').map(encodeURIComponent).join('/');
-  async function walk(dir, depth) {             // varre até 3 níveis (ex.: example/<sessão>/)
-    if (depth > 3) return;
+  async function walk(dir, depth) {             // varre até 4 níveis (base/<run>/<sessão>/)
+    if (depth > 4) return;
     const idx = await (await fetch('./' + enc(dir))).text();
     for (const m of idx.matchAll(/href="([^"?/]+\.json)"/g)) {
       const fn = decodeURIComponent(m[1]);
@@ -480,6 +576,18 @@ const turns = () => session()?.turns ?? [];
 /** Reconstrói a resposta do assistente a partir dos eventos SSE (qualquer dialeto). */
 function rebuild(turn) {
   const evs = turn.response?.events;
+  // O plugin já remonta a resposta, e para todos os dialetos. O viewer só faz
+  // isso por conta própria nos que ele conhece a fundo (blocos com id,
+  // assinatura, ordem original) — nos demais, o do plugin é melhor que nada.
+  if (turn.reply && (!evs || turn._native === false)) {
+    const blocks = [];
+    if (turn.reply.reasoning) blocks.push({ type: 'thinking', thinking: turn.reply.reasoning });
+    if (turn.reply.text) blocks.push({ type: 'text', text: turn.reply.text });
+    for (const c of turn.reply.tool_calls ?? [])
+      blocks.push({ type: 'tool_use', name: c.name, input: c.arguments, _tokens: c.tokens, _chars: c.chars });
+    return { blocks, start: null, stop: null, streamed: !!evs,
+             stop_reason: turn.reply.stop_reason ?? null, fromPlugin: true };
+  }
   if (!evs) {                                  // formato "final": conteúdo já vem pronto
     return {
       blocks: turn.response?.content ?? [],
@@ -595,7 +703,14 @@ function ctxStats(turn) {
   const body = turn.request?.body ?? {};
   const api = turn._api ?? 'anthropic';
   let sys = [], messages = [];
-  if (api === 'anthropic') {
+  if (api === 'gemini') {
+    const si = body.systemInstruction ?? body.system_instruction;
+    sys = (si?.parts ?? []).filter(p => typeof p.text === 'string').map(p => ({ text: p.text }));
+    messages = (body.contents ?? []).map(geminiMsg);
+  } else if (api === 'bedrock') {
+    sys = (body.system ?? []).filter(x => typeof x?.text === 'string').map(x => ({ text: x.text }));
+    messages = (body.messages ?? []).map(bedrockMsg);
+  } else if (api === 'anthropic') {
     sys = Array.isArray(body.system) ? body.system : body.system ? [{ text: body.system }] : [];
     messages = body.messages ?? [];
   } else {
@@ -607,10 +722,91 @@ function ctxStats(turn) {
   }
   const sysChars = sys.reduce((a, s) => a + (s.text || '').length, 0);
   const msgChars = JSON.stringify(messages).length;
-  const toolChars = JSON.stringify(body.tools ?? []).length;
-  const ctx = { sys, sysChars, msgChars, toolChars, tools: normTools(body.tools), messages };
+  // Bedrock guarda as ferramentas em toolConfig, não em tools.
+  const rawTools = api === 'bedrock' ? body.toolConfig?.tools : body.tools;
+  const toolChars = JSON.stringify(rawTools ?? []).length;
+  const ctx = { sys, sysChars, msgChars, toolChars, tools: normTools(rawTools), messages };
   Object.defineProperty(turn, '_ctx', { value: ctx, enumerable: false });
   return ctx;
+}
+
+/** Composição do prompt: onde os tokens do contexto foram parar.
+ *
+ *  Quando o log traz `prompt`, os números são os do provider — o total cobrado
+ *  do prompt, rateado entre as partes por caracteres — e somam exatamente o
+ *  `usage.prompt`. Nos logs antigos cai para chars/4, que é só uma ordem de
+ *  grandeza. `tokens.source` diz qual dos dois está na tela. */
+function composition(t) {
+  if (t._comp) return t._comp;
+  const p = t.prompt;
+  let comp;
+  if (p && p.tokens) {
+    comp = {
+      measured: String(p.tokens.source ?? '').startsWith('provider'),
+      source: p.tokens.source ?? null,
+      cpt: p.tokens.chars_per_token ?? null,
+      total: p.tokens.total ?? 0,
+      chars: p.totals?.chars ?? 0,
+      groups: [
+        { key: 'system',   label: 'System',    color: 'var(--accent)', tokens: p.tokens.system ?? 0,
+          chars: p.totals?.system_chars ?? 0,   pieces: p.system ?? [] },
+        { key: 'tools',    label: 'Tools',     color: 'var(--orange)', tokens: p.tokens.tools ?? 0,
+          chars: p.totals?.tools_chars ?? 0,    pieces: p.tools ?? [] },
+        { key: 'messages', label: 'Mensagens', color: 'var(--green)',  tokens: p.tokens.messages ?? 0,
+          chars: p.totals?.messages_chars ?? 0, pieces: p.messages ?? [] },
+      ],
+    };
+  } else {
+    const c = ctxStats(t);
+    const est = ch => Math.round(ch / 4);
+    const sysPieces = c.sys.map((b, i) => ({ index: i, chars: (b.text || '').length,
+      tokens: est((b.text || '').length), cache: b.cache_control?.type,
+      preview: (b.text || '').slice(0, 240).replace(/\s+/g, ' ') }));
+    const toolPieces = c.tools.map((x, i) => ({ index: i, name: x.name,
+      chars: JSON.stringify(x).length, tokens: est(JSON.stringify(x).length),
+      description_chars: (x.description || '').length,
+      schema_chars: JSON.stringify(x.input_schema ?? {}).length,
+      preview: (x.description || '').slice(0, 240).replace(/\s+/g, ' ') }));
+    const msgPieces = c.messages.map((m, i) => {
+      const ch = JSON.stringify(m).length;
+      return { index: i, role: m.role, chars: ch, tokens: est(ch),
+        kinds: [...new Set((Array.isArray(m.content) ? m.content : []).map(b => b.type))],
+        preview: preview(Array.isArray(m.content) ? m.content : []) };
+    });
+    const sum = a => a.reduce((x, y) => x + y.tokens, 0);
+    comp = {
+      measured: false, source: 'caracteres / 4 (o log não traz a contagem por parte)',
+      cpt: 4, chars: c.sysChars + c.toolChars + c.msgChars,
+      total: sum(sysPieces) + sum(toolPieces) + sum(msgPieces),
+      groups: [
+        { key: 'system',   label: 'System',    color: 'var(--accent)', tokens: sum(sysPieces),  chars: c.sysChars,  pieces: sysPieces },
+        { key: 'tools',    label: 'Tools',     color: 'var(--orange)', tokens: sum(toolPieces), chars: c.toolChars, pieces: toolPieces },
+        { key: 'messages', label: 'Mensagens', color: 'var(--green)',  tokens: sum(msgPieces),  chars: c.msgChars,  pieces: msgPieces },
+      ],
+    };
+  }
+  Object.defineProperty(t, '_comp', { value: comp, enumerable: false });
+  return comp;
+}
+
+const groupOf = (comp, key) => comp.groups.find(g => g.key === key);
+const pctOf = (v, total) => total ? (v / total * 100) : 0;
+
+/** Barra empilhada system / tools / mensagens. */
+function stackBar(comp) {
+  const bar = el('div', 'stack');
+  bar.innerHTML = comp.groups.map(g => {
+    const w = pctOf(g.tokens, comp.total);
+    return `<i style="width:${w}%;background:${g.color}" title="${esc(g.label)}: ${nf(g.tokens)} tokens (${w.toFixed(1)}%)">${
+      w > 9 ? esc(g.label) + ' ' + w.toFixed(0) + '%' : ''}</i>`;
+  }).join('');
+  return bar;
+}
+
+function compLegend(comp) {
+  return el('div', 'legend', comp.groups.map(g =>
+    `<span><em style="background:${g.color}"></em>${esc(g.label)} <b>${nf(g.tokens)}</b> tk · ${nf(g.chars)} chars</span>`
+  ).join('') + `<span>total <b>${nf(comp.total)}</b> tk</span>`);
 }
 
 /* =========================================================================
@@ -618,9 +814,47 @@ function ctxStats(turn) {
    ========================================================================= */
 /** Totais da sessão calculados a partir dos turnos (funciona nos dois formatos).
  *  summary.json é usado só para o que os turnos não registram (ex.: duração). */
+/** Soma o usage dos turnos agrupados por uma chave — mesma forma das tabelas
+ *  `by_*` do summary.json, mas derivada dos turnos, então continua certa numa
+ *  fatia de sessão e também funciona nos logs antigos, que não têm essas
+ *  tabelas. */
+function buckets(turns, keyOf) {
+  const map = new Map();
+  const campos = ['input', 'cache_read', 'cache_write', 'output', 'reasoning', 'total'];
+  for (const t of turns) {
+    const k = keyOf(t); if (k == null) continue;
+    const u = t.usage; if (!u) continue;
+    const b = map.get(k) ?? Object.assign({ turns: 0, cost_usd: 0 }, ...campos.map(f => ({ [f]: 0 })));
+    b.turns++;
+    for (const f of campos) b[f] += u[f] ?? 0;
+    b.cost_usd += t.estimated_cost_usd ?? 0;
+    map.set(k, b);
+  }
+  for (const b of map.values()) {
+    const prompt = b.input + b.cache_read + b.cache_write;
+    b.cache_hit_rate = prompt ? b.cache_read / prompt : null;
+    b.cost_usd = Math.round(b.cost_usd * 1e6) / 1e6;
+  }
+  return map.size ? Object.fromEntries(map) : null;
+}
+
 function sessionTotals(s) {
   const sum = s.summary ?? {};
   const add = k => s.turns.reduce((a, t) => a + (t.usage?.[k] ?? 0), 0);
+  // Tudo derivado dos próprios turnos: os campos do summary.json valem para o
+  // processo inteiro, e uma pasta pode conter mais de uma sessão.
+  const comReuso = s.turns.filter(t => t.reuse);
+  const nov = {
+    prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
+    resent_tokens: comReuso.length ? comReuso.reduce((a, t) => a + (t.reuse.resent_tokens ?? 0), 0) : null,
+    incomplete: s.turns.filter(t => t.incomplete).length || null,
+    by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
+    by_agent: buckets(s.turns, t => t.agent ?? null),
+    estimated_tokens: sum.estimated_tokens ?? null,
+    provider_cost: s.turns.reduce((a, t) => a + (t.provider_cost_usd ?? 0), 0) || null,
+    // Turnos cujos tokens o provider não contou: o total é estimado neles.
+    guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
+  };
   const elapsed = s.turns.some(t => t.elapsed_seconds != null)
     ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
     : (sum.elapsed_seconds ?? null);
@@ -631,12 +865,13 @@ function sessionTotals(s) {
     input: add('input'), output: add('output'),
     cache_read: add('cache_read'), cache_write: add('cache_write'), reasoning: add('reasoning'),
     total_tokens: add('total'),
-    estimated_cost_usd: costs.every(c => c == null) ? (sum.estimated_cost_usd ?? null)
+    estimated_cost_usd: costs.every(c => c == null) ? (sum.cost_usd ?? sum.estimated_cost_usd ?? null)
                         : costs.reduce((a, c) => a + (c ?? 0), 0),
     elapsed_seconds: elapsed,
     elapsed_approx: !s.turns.some(t => t.elapsed_seconds != null) && elapsed != null,
     estimated: s.turns.some(t => t._estimated),
     note: sum.note ?? null,
+    ...nov,
   };
 }
 
@@ -677,7 +912,8 @@ function renderSide() {
     const b = el('button', 'turnitem' + (S.sel === t.turn ? ' active' : ''));
     b.innerHTML = `
       <div class="r1">
-        <span class="dot ${ok ? 'ok' : 'err'}"></span>
+        <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
+          t.incomplete ? 'style="background:var(--yellow)"' : ''}></span>
         <span class="num">#${String(t.turn).padStart(2, '0')}</span>
         <span class="ttl">${esc(turnLabel(t))}</span>
       </div>
@@ -685,6 +921,7 @@ function renderSide() {
         <span>${secs(t.elapsed_seconds)}</span>
         <span>${nf(t.usage?.total ?? 0)} tk</span>
         <span>${money(t.estimated_cost_usd)}</span>
+        ${t.reuse && !t.reuse.prefix_stable ? '<span style="color:var(--red)" title="o prefixo do prompt quebrou">⟂</span>' : ''}
       </div>`;
     b.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
     list.append(b);
@@ -695,6 +932,10 @@ function renderSide() {
 
 /** Rótulo curto do turno: ferramentas chamadas, ou início do texto. */
 function turnLabel(t) {
+  if (t.incomplete) return 'sem resposta registrada';
+  const st = t.response?.status;
+  if (st != null && st >= 400) return `falhou · HTTP ${st}`;
+  if (t.error) return `falhou · ${t.error.message ?? 'erro de rede'}`;
   const r = rebuild(t);
   const tools = r.blocks.filter(b => b.type === 'tool_use').map(b => b.name);
   if (tools.length) return tools.join(', ');
@@ -725,10 +966,19 @@ function renderOverview() {
   const s = session(); const wrap = el('div');
   const tot2 = sessionTotals(s);
   const models = [...new Set(s.turns.map(t => t.model).filter(Boolean))];
-  const streamed = s.turns.some(t => t._format === 'stream');
+  // Uma pasta é uma conversa. Os subagentes que ela disparou têm id próprio mas
+  // são arquivados junto, então não contam como "outra sessão"; mais de uma
+  // conversa de verdade só acontece em captura antiga, e a tela diz isso.
+  const ids = [...new Set(s.turns.map(t => t.session).filter(Boolean))];
+  const subs = new Set(s.turns.filter(t => t.parent_session).map(t => t.session));
+  const raiz = ids.filter(x => !subs.has(x));
+  const streamed = s.turns.some(t => t._format === 'stream' || t._format === 'audit2');
   wrap.append(el('div', 'thead', `<h1>Visão geral</h1>
     <div class="metarow">
       <span class="chip accent solid">${esc(s.id)}</span>
+      ${raiz.map(x => `<span class="chip cyan" title="id da sessão">${esc(x)}</span>`).join('')}
+      ${subs.size ? `<span class="chip purple" title="sessões próprias na rede, arquivadas junto com quem as disparou">${subs.size} subagente(s)</span>` : ''}
+      ${raiz.length > 1 ? '<span class="chip yellow" title="captura antiga: o plugin gravava um diretório por processo, e um processo atende várias sessões">várias conversas nesta pasta</span>' : ''}
       <span class="chip">${esc(s.turns[0]?.provider ?? '—')}</span>
       ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
       <span class="chip">${s.turns[0]?._approxTime ? '~' : ''}início ${esc(fmtTime(s.turns[0]?.started_at))}</span>
@@ -752,41 +1002,35 @@ function renderOverview() {
     K((tot2.elapsed_approx ? '~' : '') + secs(tot2.elapsed_seconds),
        tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
     K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache', 'var(--cyan)') +
-    K(nf(tot2.errors), 'Erros', (tot2.errors ? 'var(--red)' : 'var(--green)'))
+    K(nf(tot2.errors), 'Erros', (tot2.errors ? 'var(--red)' : 'var(--green)')) +
+    // Cada quebra de prefixo é um cache miss no histórico inteiro: é o primeiro
+    // lugar para olhar quando o custo sobe.
+    (tot2.prefix_breaks != null
+      ? K(nf(tot2.prefix_breaks), 'Quebras de prefixo', tot2.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
+    (tot2.resent_tokens != null ? K(nf(tot2.resent_tokens), 'Tokens reenviados', 'var(--yellow)') : '') +
+    (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '')
   ));
+  const contados = s.turns.filter(t => t.usage?.source === 'provider').length;
+  const comUsage = s.turns.filter(t => t.usage && t.usage.total).length;
+  if (comUsage && s.turns.some(t => t.usage?.source)) {
+    const parcial = tot2.guessed > 0;
+    wrap.append(el('div', parcial ? 'notebox' : 'foot',
+      (parcial ? '<b>Contagem parcial:</b> ' : '')
+      + `${contados}/${comUsage} turnos contados pelo provider`
+      + (parcial ? `; nos outros ${tot2.guessed} ele não reportou nada e os tokens foram estimados por caracteres`
+                 : ' — números exatos')
+      + (tot2.estimated_tokens ? ` · estimados à parte: ${nf(tot2.estimated_tokens.total)} tk` : '')
+      + (tot2.incomplete ? ` · ${tot2.incomplete} turno(s) sem resposta ficaram de fora dos totais` : '')
+      + '.'));
+  }
   if (tot2.estimated) wrap.append(el('div', 'foot',
     '* o log não traz custo por turno; calculado com a tabela de preços embutida no viewer '
     + `(${esc(models.join(', '))}).`));
 
-  // gráfico de tokens por turno
-  wrap.append(el('h3', null, 'Tokens por turno'));
-  const max = Math.max(...s.turns.map(t => t.usage?.total ?? 0), 1);
-  const chart = el('div', 'chart');
-  for (const t of s.turns) {
-    const u = t.usage ?? {};
-    const bar = el('div', 'bar');
-    const h = p => (p / max * 132) + 'px';
-    bar.innerHTML =
-      `<i style="height:${h(u.output ?? 0)};background:var(--purple)" title="output ${nf(u.output)}"></i>` +
-      `<i style="height:${h(u.input ?? 0)};background:var(--accent)" title="input ${nf(u.input)}"></i>` +
-      `<i style="height:${h(u.cache_write ?? 0)};background:var(--yellow)" title="cache write ${nf(u.cache_write)}"></i>` +
-      `<i style="height:${h(u.cache_read ?? 0)};background:var(--cyan)" title="cache read ${nf(u.cache_read)}"></i>` +
-      `<div class="lbl">#${t.turn}</div>`;
-    bar.title = `Turno ${t.turn} · ${nf(u.total)} tokens · ${money(t.estimated_cost_usd)}`;
-    bar.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
-    chart.append(bar);
-  }
-  wrap.append(chart);
-  wrap.append(el('div', 'toklegend',
-    `<span><em style="background:var(--cyan)"></em>cache read <b>${nf(tot.cr)}</b></span>
-     <span><em style="background:var(--yellow)"></em>cache write <b>${nf(tot.cw)}</b></span>
-     <span><em style="background:var(--accent)"></em>input <b>${nf(tot.i)}</b></span>
-     <span><em style="background:var(--purple)"></em>output <b>${nf(tot.o)}</b></span>`));
-
   // tabela por turno
   const tbl = el('table');
   tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th><th>Msgs</th>
-      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Tempo</th><th>Custo</th><th>Fim</th></tr></thead>`;
+      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Prefixo</th><th>Tempo</th><th>Custo</th><th>Fim</th></tr></thead>`;
   const tb = el('tbody');
   for (const t of s.turns) {
     const u = t.usage ?? {};
@@ -798,14 +1042,39 @@ function renderOverview() {
       <td class="v">${nf(u.input)}</td><td class="v" style="color:var(--cyan)">${nf(u.cache_read)}</td>
       <td class="v" style="color:var(--yellow)">${nf(u.cache_write)}</td>
       <td class="v" style="color:var(--purple)">${nf(u.output)}</td>
+      <td class="v">${t.reuse ? (t.reuse.prefix_stable
+          ? '<span style="color:var(--green)">estável</span>'
+          : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v">${secs(t.elapsed_seconds)}</td><td class="v">${money(t.estimated_cost_usd)}</td>
-      <td class="v" style="color:${ok ? 'var(--green)' : 'var(--red)'}">${st ?? esc(t.response?.stop_reason ?? '—')}</td>`;
+      <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
+        t.incomplete ? 'incompleto' : (st ?? esc(t.response?.stop_reason ?? '—'))}</td>`;
     tr.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
     tb.append(tr);
   }
   tbl.append(tb);
-  const card = el('div', 'card'); card.style.padding = '4px 8px'; card.append(tbl);
+  const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
   wrap.append(el('h3', null, 'Turnos'), card);
+
+  // Tokens de modelos diferentes não são o mesmo dinheiro nem o mesmo problema.
+  for (const [title, data] of [['Por modelo', tot2.by_model], ['Por agente', tot2.by_agent]]) {
+    if (!data || !Object.keys(data).length) continue;
+    const bt = el('table');
+    bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th>Turnos</th><th>Input</th>
+      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th><th>Custo</th></tr></thead>`;
+    const bb = el('tbody');
+    for (const [name, v] of Object.entries(data))
+      bb.innerHTML += `<tr><td style="white-space:nowrap">${esc(name)}</td>
+        <td class="num">${nf(v.turns)}</td><td class="num">${nf(v.input)}</td>
+        <td class="num" style="color:var(--cyan)">${nf(v.cache_read)}</td>
+        <td class="num" style="color:var(--yellow)">${nf(v.cache_write)}</td>
+        <td class="num" style="color:var(--purple)">${nf(v.output)}</td>
+        <td class="num">${nf(v.total)}</td>
+        <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td>
+        <td class="num" style="color:var(--green)">${money(v.cost_usd)}</td></tr>`;
+    bt.append(bb);
+    const c2 = el('div', 'card tablecard'); c2.style.padding = '4px 8px'; c2.append(bt);
+    wrap.append(el('h3', null, title), c2);
+  }
   return wrap;
 }
 
@@ -820,6 +1089,7 @@ function renderTurnHead(t) {
   const h = el('div', 'thead');
   h.innerHTML = `<h1>Turno ${t.turn}
       ${st != null ? `<span class="chip ${ok ? 'green' : 'red'} solid">HTTP ${st}</span>` : ''}
+      ${t.incomplete ? '<span class="chip yellow solid">incompleto</span>' : ''}
       ${res.error ? '<span class="chip red solid">erro</span>' : ''}</h1>
     <div class="metarow">
       <span class="chip purple">${esc(t.model)}</span>
@@ -829,6 +1099,10 @@ function renderTurnHead(t) {
       ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
       ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
       ${chip('green', t.estimated_cost_usd != null ? money(t.estimated_cost_usd) + (t._estimated ? '*' : '') : null)}
+      ${chip('green', t.provider_cost_usd != null ? 'provider ' + money(t.provider_cost_usd) : null)}
+      ${u.source === 'estimated' ? '<span class="chip yellow solid">tokens estimados</span>'
+        : u.source === 'provider' ? '<span class="chip green">contagem do provider</span>' : ''}
+      ${chip('cyan', t.cache_hit_rate != null ? 'cache ' + (t.cache_hit_rate * 100).toFixed(1) + '%' : null)}
       <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span>
       ${chip('', res.bytes != null ? bytes(res.bytes) : null)}
       ${chip('', res.service_tier ? 'tier ' + esc(res.service_tier) : null)}
@@ -853,15 +1127,22 @@ function renderTurnHead(t) {
      <span><em style="background:var(--accent)"></em>input <b>${nf(u.input)}</b></span>
      <span><em style="background:var(--purple)"></em>output <b>${nf(u.output)}</b></span>
      <span>reasoning <b>${nf(u.reasoning)}</b></span>
+     ${u.prompt != null ? `<span>prompt <b>${nf(u.prompt)}</b></span>` : ''}
      <span>total <b>${nf(u.total)}</b></span>`));
+  if (t.incomplete)
+    h.append(el('div', 'notebox',
+      '<b>Turno incompleto:</b> ' + esc(t.note ?? 'a resposta não chegou antes do processo encerrar.')
+      + ' A requisição está registrada, mas não há resposta nem contagem de tokens — este turno não entra nos totais.'));
   return h;
 }
 
 /* ---------- abas ---------- */
 function renderTabs(t) {
   const c = ctxStats(t); const r = rebuild(t);
+  const comp = composition(t);
   const defs = [
     ['conv', 'Conversa', c.messages.length + r.blocks.length],
+    ['comp', 'Composição', nf(comp.total)],
     ['req', 'Request', null],
     ['sys', 'System + Tools', c.tools.length],
     ...(t.response?.events ? [['stream', 'Stream', t.response.events.length]] : []),
@@ -880,6 +1161,7 @@ function renderTabs(t) {
 
 function renderTabBody(t) {
   switch (S.tab) {
+    case 'comp': return renderComposition(t);
     case 'req': return renderRequest(t);
     case 'sys': return renderSystem(t);
     case 'stream': return renderStream(t);
@@ -892,8 +1174,12 @@ function renderTabBody(t) {
 function renderConversation(t) {
   const wrap = el('div');
   const c = ctxStats(t);
+  // O plugin diz exatamente até onde o prefixo é idêntico; sem ele, resta
+  // comparar a contagem de mensagens com a do turno anterior.
   const prev = turns().find(x => x.turn === t.turn - 1);
-  const prevLen = prev ? ctxStats(prev).messages.length : 0;
+  const prevLen = t.reuse ? t.reuse.stable_messages : (prev ? ctxStats(prev).messages.length : 0);
+  const exact = !!t.reuse;
+  const msgTokens = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
 
   if (c.sys.length) {
     const d = el('details', 'card msg system');
@@ -906,7 +1192,8 @@ function renderConversation(t) {
     d.append(body); wrap.append(d);
   }
 
-  c.messages.forEach((m, i) => wrap.append(messageCard(m, i, i >= prevLen && prevLen > 0)));
+  c.messages.forEach((m, i) =>
+    wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens)));
 
   // resposta reconstruída
   const r = rebuild(t);
@@ -915,16 +1202,25 @@ function renderConversation(t) {
     <span class="who" style="color:var(--purple)">ASSISTANT · resposta</span>
     <span class="grow"></span>
     <span class="chip ${r.streamed ? 'green' : 'cyan'} solid">${r.streamed ? '↩ reconstruída do stream' : '↩ resposta final'}</span>
+    ${(t.response?.status ?? 0) >= 400 ? `<span class="chip red solid">HTTP ${t.response.status}</span>` : ''}
     <span class="chip">${r.blocks.length} bloco(s)</span>
     <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span></summary>`;
   const body = el('div', 'cbody');
-  if (!r.blocks.length) body.append(el('div', 'empty', 'Sem blocos de conteúdo na resposta.'));
+  if (!r.blocks.length) {
+    const st = t.response?.status;
+    const falhou = (st != null && st >= 400) || t.error;
+    body.append(el('div', falhou ? 'notebox' : 'empty', falhou
+      ? `<b>A requisição falhou${st != null ? ` com HTTP ${st}` : ''}:</b> ` +
+        esc((t.error?.message ?? textOf(t.response?.body)) || 'o provider não devolveu corpo nenhum.') +
+        ' Não há resposta para mostrar; o turno fica no log porque a requisição chegou a ser enviada.'
+      : 'Sem blocos de conteúdo na resposta.'));
+  }
   r.blocks.forEach(b => body.append(renderBlock(b)));
   d.append(body); wrap.append(d);
   return wrap;
 }
 
-function messageCard(m, i, isNew) {
+function messageCard(m, i, isNew, tokens) {
   const role = m.role || '?';
   const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
   const kinds = [...new Set(blocks.map(b => b.type))];
@@ -934,6 +1230,7 @@ function messageCard(m, i, isNew) {
     <span class="who" style="color:${color}">${esc(role.toUpperCase())}</span>
     <span class="grow" style="color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(preview(blocks))}</span>
     ${isNew ? '<span class="chip green solid">novo neste turno</span>' : ''}
+    ${tokens != null ? `<span class="chip accent">${nf(tokens)} tk</span>` : ''}
     <span class="chip">#${i}</span>
     ${kinds.map(k => `<span class="chip ${k === 'tool_use' ? 'yellow' : k === 'tool_result' ? 'green' : ''}">${esc(k)}</span>`).join('')}</summary>`;
   const body = el('div', 'cbody');
@@ -997,20 +1294,22 @@ function renderBlock(b) {
 
 function blockCard(kind, title, text, rich) {
   const c = el('div', 'block ' + kind);
+  const raw = String(text ?? '');
   c.append(el('div', 'bh', `<span>${esc(title)}</span>`));
-  c.append(preBody(rich ? md(String(text ?? '')) : highlight(esc(String(text ?? ''))), false, rich));
+  c.append(preBody(rich ? md(raw) : highlight(esc(raw)), false, rich, false,
+                   rich && MD_RE.test(raw) ? raw : null));
   return c;
 }
 
-/** Corpo colapsável com botão "expandir". */
-function preBody(html, isJson, rich) {
+/** Corpo colapsável com "expandir", "ver fonte" (quando `src` é dado) e "copiar". */
+function preBody(html, isJson, rich, open, src) {
   const wrap = el('div');
   const body = el('div', 'bb');
   const pre = el('pre', 'clip', html);
   if (rich) { pre.className = 'clip txt'; }
+  if (open) pre.classList.remove('clip');
   body.append(pre); wrap.append(body);
-  const raw = pre.textContent;
-  const btn = el('button', 'expander', 'expandir ▾');
+  const btn = el('button', 'expander', open ? 'recolher ▴' : 'expandir ▾');
   pre.__btn = btn;                       // medido sob demanda por syncExpanders()
   btn.onclick = () => {
     const open = pre.classList.toggle('clip');
@@ -1021,8 +1320,23 @@ function preBody(html, isJson, rich) {
   btn.style.flex = '1';
   const cp = el('button', 'expander', 'copiar');
   cp.style.cssText = 'flex:none;width:88px;border-left:1px solid var(--border)';
-  cp.onclick = () => { navigator.clipboard.writeText(raw); cp.textContent = 'copiado ✓'; setTimeout(() => cp.textContent = 'copiar', 1200); };
-  bar.append(btn, cp); wrap.append(bar);
+  // Lê o <pre> na hora do clique: em "ver fonte" o que se quer copiar é o
+  // texto original, não o preview renderizado.
+  cp.onclick = () => { navigator.clipboard.writeText(pre.textContent); cp.textContent = 'copiado ✓'; setTimeout(() => cp.textContent = 'copiar', 1200); };
+  bar.append(btn);
+  if (src != null) {
+    const tog = el('button', 'expander', 'ver fonte');
+    tog.style.cssText = 'flex:none;width:104px;border-left:1px solid var(--border)';
+    let source = false;
+    tog.onclick = () => {
+      source = !source;
+      pre.classList.toggle('txt', !source);
+      pre.innerHTML = source ? highlight(esc(src)) : html;
+      tog.textContent = source ? 'ver markdown' : 'ver fonte';
+    };
+    bar.append(tog);
+  }
+  bar.append(cp); wrap.append(bar);
   return wrap;
 }
 
@@ -1036,6 +1350,148 @@ function syncExpanders() {
   }
 }
 $('#content').addEventListener('toggle', () => requestAnimationFrame(syncExpanders), true);
+
+/** Faixa de reuso: quanto deste prompt é o prompt anterior, byte a byte.
+ *  É o número que decide o custo — um prefixo estável é lido do cache, um
+ *  prefixo quebrado é relido inteiro. */
+function reusePanel(t, R, comp) {
+  const stable = R.prefix_stable;
+  const box = el('div', 'reuse ' + (stable ? 'stable' : 'broke'));
+  const resent = R.resent_tokens ?? Math.round((R.resent_chars ?? 0) / 4);
+  const fresh = R.new_tokens ?? Math.round((R.new_chars ?? 0) / 4);
+  const hit = t.cache_hit_rate;
+  box.innerHTML =
+    `<span class="lead" style="color:${stable ? 'var(--green)' : 'var(--red)'}">
+       ${stable ? '✓ prefixo estável' : '✗ prefixo quebrou'}</span>
+     <span class="chip">vs. turno ${R.previous_turn}</span>
+     <span class="chip cyan">${nf(R.stable_messages)} ${R.stable_messages === 1 ? 'msg idêntica' : 'msgs idênticas'} · ${nf(resent)} tk reenviados</span>
+     <span class="chip green">${nf(R.added_messages)} ${R.added_messages === 1 ? 'msg nova' : 'msgs novas'} · ${nf(fresh)} tk</span>
+     ${R.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg sumiram</span>` : ''}
+     ${R.changed_at != null ? `<span class="chip red solid">divergiu na msg #${R.changed_at}</span>` : ''}
+     ${R.system_changed ? '<span class="chip red solid">system mudou</span>' : ''}
+     ${R.tools_changed ? '<span class="chip red solid">tools mudaram</span>' : ''}
+     ${hit != null ? `<span class="chip ${hit > 0.5 ? 'green' : 'yellow'}">cache ${(hit * 100).toFixed(1)}%</span>` : ''}`;
+  const foot = el('div', 'foot');
+  foot.style.margin = '-6px 0 14px';
+  foot.innerHTML = stable
+    ? 'O turno só acrescentou ao fim do contexto: tudo que o provider podia reaproveitar continua lá, na mesma ordem.'
+    : 'Algo antes do fim do contexto mudou, então o cache do prefixo inteiro foi perdido — é aqui que o custo escapa. '
+      + 'Marcadores de cache que apenas mudam de lugar não contam como quebra.';
+  const wrap = el('div');
+  wrap.append(box, foot);
+  return wrap;
+}
+
+/* ---------- aba: composição do prompt ---------- */
+function renderComposition(t) {
+  const wrap = el('div');
+  const comp = composition(t);
+  const u = t.usage ?? {};
+
+  if (t.reuse) wrap.append(reusePanel(t, t.reuse, comp));
+
+  const head = el('div', 'metarow');
+  head.innerHTML =
+    `<span class="chip ${comp.measured ? 'green' : 'yellow'} solid">${
+       comp.measured ? 'tokens do provider, rateados por caracteres' : 'estimativa por caracteres'}</span>` +
+    (comp.cpt != null ? `<span class="chip">${comp.cpt} chars/token</span>` : '') +
+    `<span class="chip">${nf(comp.chars)} chars no prompt</span>` +
+    (u.prompt != null ? `<span class="chip accent">${nf(u.prompt)} tk cobrados no prompt</span>` : '');
+  wrap.append(head);
+  wrap.append(stackBar(comp), compLegend(comp));
+  if (comp.measured && comp.cpt != null && (comp.cpt < 2 || comp.cpt > 8))
+    wrap.append(el('div', 'notebox',
+      `<b>Proporção suspeita:</b> ${comp.cpt} caracteres por token está longe dos ~4 de texto comum. `
+      + 'Ou o prompt tem imagens/áudio, ou nem tudo que o provider cobrou estava no corpo da requisição — '
+      + 'o rateio por parte abaixo é indicativo, não exato.'));
+
+  // ---- ferramentas, do mais caro para o mais barato
+  const tools = groupOf(comp, 'tools');
+  if (tools.pieces.length) {
+    wrap.append(el('h3', null, `Ferramentas · ${nf(tools.tokens)} tokens (${pctOf(tools.tokens, comp.total).toFixed(1)}% do prompt)`));
+    const tbl = el('table');
+    tbl.innerHTML = `<thead><tr><th>Ferramenta</th><th>Tokens</th><th>%</th><th style="width:22%"></th>
+      <th>Schema</th><th>Descrição</th></tr></thead>`;
+    const tb = el('tbody');
+    const max = Math.max(...tools.pieces.map(x => x.tokens ?? 0), 1);
+    for (const x of [...tools.pieces].sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0))) {
+      tb.innerHTML += `<tr>
+        <td style="font-family:var(--mono);color:var(--yellow);white-space:nowrap">${esc(x.name ?? '—')}</td>
+        <td class="num">${nf(x.tokens)}</td>
+        <td class="num" style="color:var(--muted)">${pctOf(x.tokens, comp.total).toFixed(1)}%</td>
+        <td><div class="mini"><i style="width:${(x.tokens ?? 0) / max * 100}%;background:var(--orange)"></i></div></td>
+        <td class="num">${nf(x.schema_chars)} ch</td>
+        <td class="num" style="color:var(--muted)">${nf(x.description_chars)} ch</td></tr>`;
+    }
+    tbl.append(tb);
+    const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+    wrap.append(card);
+  }
+
+  // ---- blocos de system
+  const sys = groupOf(comp, 'system');
+  if (sys.pieces.length) {
+    wrap.append(el('h3', null, `System · ${nf(sys.tokens)} tokens (${pctOf(sys.tokens, comp.total).toFixed(1)}% do prompt)`));
+    const tbl = el('table');
+    tbl.innerHTML = `<thead><tr><th>#</th><th>Tokens</th><th>%</th><th>Cache</th><th>Trecho</th></tr></thead>`;
+    const tb = el('tbody');
+    for (const x of sys.pieces)
+      tb.innerHTML += `<tr><td class="k">[${x.index}]</td><td class="num">${nf(x.tokens)}</td>
+        <td class="num" style="color:var(--muted)">${pctOf(x.tokens, comp.total).toFixed(1)}%</td>
+        <td>${x.cache ? `<span class="chip cyan solid">${esc(x.cache)}</span>` : '<span style="color:var(--faint)">—</span>'}</td>
+        <td class="wrap" style="color:var(--muted)">${esc(x.preview ?? '')}</td></tr>`;
+    tbl.append(tb);
+    const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+    wrap.append(card);
+  }
+
+  // ---- mensagens, marcando onde o prefixo divergiu
+  const msgs = groupOf(comp, 'messages');
+  if (msgs.pieces.length) {
+    const R = t.reuse;
+    wrap.append(el('h3', null, `Mensagens · ${nf(msgs.tokens)} tokens (${pctOf(msgs.tokens, comp.total).toFixed(1)}% do prompt)`));
+    const tbl = el('table');
+    tbl.innerHTML = `<thead><tr><th>#</th><th>Papel</th><th>Conteúdo</th><th>Tokens</th><th>%</th>
+      <th>Cache</th><th>Estado</th></tr></thead>`;
+    const tb = el('tbody');
+    for (const x of msgs.pieces) {
+      const isNew = R && x.index >= R.stable_messages;
+      const broke = R && R.changed_at != null && x.index === R.changed_at;
+      tb.innerHTML += `<tr class="${broke ? 'broke' : ''}">
+        <td class="k">#${x.index}</td>
+        <td style="color:${x.role === 'user' ? 'var(--cyan)' : 'var(--purple)'}">${esc(x.role ?? '—')}</td>
+        <td style="color:var(--muted);font-family:var(--mono);font-size:11px">${esc((x.kinds ?? []).join(', '))}${
+          x.binary ? ' <span class="chip yellow">binário</span>' : ''}</td>
+        <td class="num">${nf(x.tokens)}</td>
+        <td class="num" style="color:var(--muted)">${pctOf(x.tokens, comp.total).toFixed(1)}%</td>
+        <td>${x.cache ? `<span class="chip cyan solid">${esc(x.cache)}</span>` : '<span style="color:var(--faint)">—</span>'}</td>
+        <td>${broke ? '<span class="chip red solid">divergiu aqui</span>'
+            : isNew ? '<span class="chip green">nova</span>'
+            : R ? '<span class="chip" style="color:var(--faint)">reenviada</span>' : ''}</td></tr>`;
+    }
+    tbl.append(tb);
+    const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+    wrap.append(card);
+  }
+
+  // ---- saída do modelo
+  if (t.reply?.tokens) {
+    const k = t.reply.tokens; const ch = t.reply.chars ?? {};
+    wrap.append(el('h3', null, `Resposta · ${nf(k.output)} tokens de saída`));
+    const tbl = el('table');
+    tbl.innerHTML = `<thead><tr><th>Parte</th><th>Tokens</th><th>Chars</th></tr></thead>
+      <tbody>
+        <tr><td>Texto</td><td class="num">${nf(k.text)}</td><td class="num">${nf(ch.text)}</td></tr>
+        <tr><td>Raciocínio</td><td class="num">${nf(k.reasoning)}</td><td class="num">${nf(ch.reasoning)}</td></tr>
+        <tr><td>Chamadas de ferramenta</td><td class="num">${nf(k.tool_calls)}</td><td class="num">${nf(ch.tool_calls)}</td></tr>
+      </tbody>`;
+    const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+    wrap.append(card);
+    if (k.source && !String(k.source).startsWith('provider'))
+      wrap.append(el('div', 'foot', 'Saída estimada por caracteres: o provider não reportou a contagem neste turno.'));
+  }
+  return wrap;
+}
 
 /* ---------- aba: request ---------- */
 function renderRequest(t) {
@@ -1067,7 +1523,26 @@ function renderRequest(t) {
     store: b.store, mensagens: cx.messages.length, ferramentas: cx.tools.length }, 'Parâmetros'));
   add(kv(rq.headers, 'Headers da requisição'));
   add(kv(res.headers, 'Headers da resposta'));
-  add(kv({ ...t.usage, ...(res.cache_5m != null ? { cache_write_5m: res.cache_5m, cache_write_1h: res.cache_1h } : {}) }, 'Usage'));
+  const u = t.usage ?? {};
+  add(kv({
+    origem: u.source === 'provider' ? 'contagem do provider (exata)'
+          : u.source === 'estimated' ? 'estimada pelo plugin: o provider não reportou nada'
+          : null,
+    input: u.input, cache_read: u.cache_read, cache_write: u.cache_write,
+    prompt: u.prompt, output: u.output, reasoning: u.reasoning, total: u.total,
+    cache_hit_rate: t.cache_hit_rate != null ? (t.cache_hit_rate * 100).toFixed(2) + '%' : null,
+    ...(res.cache_5m != null ? { cache_write_5m: res.cache_5m, cache_write_1h: res.cache_1h } : {}),
+  }, 'Usage'));
+  // Contadores que só alguns provedores mandam, e o total como *eles* somam —
+  // guardado para conferência, não somado ao nosso.
+  add(kv(u.details, 'Usage · detalhes do provider'));
+  const cost = t.cost ?? null;
+  if (cost) {
+    add(kv({ estimated_usd: cost.estimated_usd, provider_usd: cost.provider_usd,
+             modelo_tarifado: cost.model, nota: cost.note }, 'Custo'));
+    add(kv(cost.per_million, 'Preço usado (USD por 1M tokens)'));
+  }
+  add(kv(t.prompt?.settings, 'Parâmetros de amostragem (como foram no corpo)'));
   if (t._estimated) wrap.append(el('div', 'foot',
     '* custo não vem no log; calculado localmente a partir do modelo e do usage.'));
   return wrap;
@@ -1082,7 +1557,8 @@ function renderSystem(t) {
       <span style="flex:1"></span>
       ${b.cache_control ? `<span class="chip cyan solid">cache_control: ${esc(b.cache_control.type)}</span>` : ''}
       <span class="chip">${nf((b.text || '').length)} chars ≈ ${nf(Math.round((b.text || '').length / 4))} tk</span></summary>`;
-    const body = el('div', 'cbody'); body.append(preBody(md(b.text || ''), false, true));
+    const body = el('div', 'cbody');
+    body.append(preBody(md(b.text || ''), false, true, false, MD_RE.test(b.text || '') ? b.text : null));
     d.append(body); wrap.append(d);
   });
   if (!c.tools.length) { wrap.append(el('div', 'empty', 'Nenhuma ferramenta enviada neste turno.')); return wrap; }
@@ -1229,21 +1705,15 @@ function evSummary(e) {
 }
 
 /* ---------- aba: json bruto ---------- */
+/** O arquivo do turno inteiro, como está no disco. Nada de recortes: o
+ *  request, a resposta e os eventos já estão todos aqui dentro. */
 function renderRaw(t) {
-  const wrap = el('div');
-  const mk = (title, obj) => {
-    const d = el('details', 'card');
-    d.innerHTML = `<summary><span class="caret">▶</span><b>${esc(title)}</b></summary>`;
-    const body = el('div', 'cbody');
-    body.append(preBody(typeof obj === 'string' ? highlight(esc(obj)) : jsonHTML(obj)));
-    d.append(body); return d;
-  };
-  const full = mk('Turno completo (JSON, normalizado)', t); full.open = true;
-  wrap.append(full, mk('request.body', t.request?.body));
-  if (t.response?.content) wrap.append(mk('response.content', t.response.content));
-  if (t.response?.events) wrap.append(mk('response.events', t.response.events));
-  if (t.response?.raw) wrap.append(mk('response.raw (SSE bruto)', t.response.raw));
-  return wrap;
+  const card = el('div', 'card');
+  const body = el('div', 'cbody');
+  body.style.borderTop = 'none';
+  body.append(preBody(jsonHTML(t._raw ?? t), true, false, true));
+  card.append(body);
+  return card;
 }
 
 /* =========================================================================
@@ -1259,14 +1729,65 @@ function jsonHTML(obj) {
     .replace(/:\s(null)/g, ': <span class="j-null">$1</span>');
 }
 
-/** Markdown mínimo: fences, inline code, bold, headings. Entrada já escapada. */
+/** Marcas que valem um preview. Serve para decidir se o botão "ver fonte"
+ *  aparece: em texto sem markdown nenhum ele não teria o que mostrar. */
+const MD_RE = /```|`[^`\n]+`|\*\*\S|~~\S|\[[^\]\n]+\]\(|(^|\n)[ \t]*(#{1,6} |[-*+] |\d+[.)] |> |---)/;
+
+/** Markdown suficiente para ler a saída de um agente: blocos de código, listas,
+ *  títulos, citações, links e ênfase.
+ *
+ *  Isto é preview, não a fonte — o texto exato que trafegou continua a um clique
+ *  no botão "ver fonte", que é o que importa numa auditoria.
+ *
+ *  Os blocos de código saem de cena antes de tudo e voltam no fim: sem isso um
+ *  `**` dentro de um exemplo de código viraria negrito. `_` e `__` não marcam
+ *  ênfase aqui de propósito — estes logs são cheios de nomes como
+ *  `cache_read_input_tokens`, que ficariam picotados. */
 function md(raw) {
-  let s = esc(raw);
-  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre class="code">${c}</pre>`);
-  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/^(#{1,4})\s+(.+)$/gm, (_, h, txt) => `<strong style="font-size:${17 - h.length}px">${txt}</strong>`);
-  return highlight(s);
+  const fences = [], codes = [];
+  let s = String(raw ?? '').replace(/```(\w*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
+    fences.push(`<pre class="code">${esc(code.replace(/\n$/, ''))}</pre>`);
+    return `\u0000F${fences.length - 1}\u0000`;
+  });
+  s = esc(s);
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(`<code>${c}</code>`); return `\u0000C${codes.length - 1}\u0000`; });
+
+  // trechos: link antes de ênfase, para o texto do link poder ser negrito
+  s = s.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (_, txt, href) =>
+    /^(https?:\/\/|mailto:)/i.test(href) ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">${txt}</a>` : txt);
+  s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*(?=\S)([^*\n]*?\S)\*/g, '<em>$1</em>');
+  s = s.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>');
+
+  // linhas: o container é pre-wrap, então os blocos são emendados sem \n
+  // em volta — senão cada lista abriria uma linha em branco.
+  let html = '', list = null, items = [];
+  const flush = () => { if (list) { html += `<${list}>${items.join('')}</${list}>`; items = []; list = null; } };
+  for (const line of s.split(/\r?\n/)) {
+    let m;
+    if ((m = /^[ \t]*(#{1,6})\s+(.*)$/.exec(line))) {
+      flush(); html += `<div class="mdh" style="font-size:${Math.max(13, 20 - m[1].length)}px">${m[2]}</div>`;
+    } else if ((m = /^[ \t]*[-*+]\s+(.*)$/.exec(line))) {
+      if (list !== 'ul') { flush(); list = 'ul'; }
+      items.push(`<li>${m[1]}</li>`);
+    } else if ((m = /^[ \t]*\d+[.)]\s+(.*)$/.exec(line))) {
+      if (list !== 'ol') { flush(); list = 'ol'; }
+      items.push(`<li>${m[1]}</li>`);
+    } else if ((m = /^[ \t]*&gt;\s?(.*)$/.exec(line))) {
+      flush(); html += `<blockquote>${m[1]}</blockquote>`;
+    } else if (/^[ \t]*(---+|\*\*\*+)[ \t]*$/.test(line)) {
+      flush(); html += '<hr>';
+    } else {
+      flush(); html += line + '\n';
+    }
+  }
+  flush();
+
+  html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codes[+i])
+             .replace(/\u0000F(\d+)\u0000/g, (_, i) => fences[+i])
+             .replace(/(<\/(?:pre|ul|ol|blockquote|div)>|<hr>)\n/g, '$1')
+             .replace(/\n$/, '');
+  return highlight(html);
 }
 
 /** Destaca o termo de busca (não quebra tags). */
@@ -1296,7 +1817,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'j' || e.key === 'ArrowDown') { S.sel = list[Math.min(at + 1, list.length - 1)] ?? list[0]; render(); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { if (at > 0) { S.sel = list[at - 1]; render(); } else { S.sel = 'overview'; render(); } }
   else if (e.key === '/') { e.preventDefault(); $('#search').focus(); }
-  else if (['1','2','3','4','5'].includes(e.key)) { S.tab = ['conv','req','sys','stream','json'][+e.key - 1]; render(); }
+  else if (['1','2','3','4','5','6'].includes(e.key)) { S.tab = ['conv','comp','req','sys','stream','json'][+e.key - 1]; render(); }
 });
 </script>
 </body>
