@@ -61,6 +61,17 @@ header .grow{flex:1}
 .turnitem .ttl{flex:1;font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .turnitem .r2{display:flex;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
 .turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
+/* Turnos de subagente: recuados sob o cabeçalho da task que os disparou. */
+.turnitem.sub{margin-left:10px;width:calc(100% - 10px);box-shadow:inset 2px 0 var(--purple)}
+.subhead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:7px 0 3px;
+  border-radius:8px;background:var(--panel2);border:1px solid var(--border)}
+.subhead:hover{background:var(--panel3)}
+.subhead .caret{color:var(--faint);font-size:10px;flex:none;transition:transform .12s}
+.subhead.closed .caret{transform:rotate(-90deg)}
+.subhead .who{flex:1;font-size:11.5px;color:var(--purple);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subhead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
+.scopebar{padding:8px 6px 0}
+.scopebar select{width:100%;font-size:11.5px}
 
 /* ---------- badges / chips ---------- */
 .dot{width:7px;height:7px;border-radius:50%;flex:none}
@@ -240,7 +251,10 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
 /* =========================================================================
    Estado
    ========================================================================= */
-const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupDeltas: true };
+const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupDeltas: true,
+            // Escopo da lista lateral: 'all', 'root' (só a conversa principal) ou o id de
+            // um subagente; `collapsed` guarda os grupos recolhidos.
+            scope: 'all', collapsed: new Set() };
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -500,9 +514,11 @@ function ingest(files) {                       // files: [{path, text, mtime}]
       catch (e) { console.warn('turno ignorado:', f.path, e); }
     }
   }
-  // Uma pasta, uma sessão. O plugin escreve `<run>/<sessão>/turn_*.json`, então
-  // a pasta que contém os turnos já é a unidade certa — agrupar por ela basta.
-  // A pasta do run só tem o resumo e nenhum turno; o filtro abaixo a descarta.
+  // Uma pasta, uma sessão. O plugin escreve `<sessão>/turn_*.json` — a mesma
+  // pasta toda vez que a sessão é retomada —, então a pasta que contém os
+  // turnos já é a unidade certa: agrupar por ela basta. `runs/` só tem os
+  // resumos de cada processo e nenhum turno; o filtro abaixo o descarta, assim
+  // como as pastas de run do formato antigo.
   const sessions = [...map.values()].filter(s => s.turns.length);
   sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
   sessions.sort((a, b) => b.id.localeCompare(a.id));
@@ -838,6 +854,38 @@ function buckets(turns, keyOf) {
   return map.size ? Object.fromEntries(map) : null;
 }
 
+const shortId = id => (id ?? '').replace(/^ses_/, '').slice(0, 10);
+
+/** Um turno é de subagente quando a sessão que o mandou não é a dona da pasta.
+ *  `root_session` é a decisão do próprio plugin — quem ele resolveu como raiz —,
+ *  e `parent_session` cobre o log gravado antes desse campo existir. */
+const isSub = t => (t.root_session && t.session ? t.root_session !== t.session : !!t.parent_session);
+const parentOf = t => t.parent_session ?? t.root_session ?? null;
+
+/** Como os turnos da pasta se dividem entre a conversa e os subagentes que ela
+ *  disparou. Um subagente é uma sessão própria na rede — id e turnos seus —, mas
+ *  o trabalho é de quem o chamou: o plugin arquiva tudo na pasta da mãe, e aqui a
+ *  gente separa de novo, só para mostrar. Log antigo, sem `parent_session`, cai no
+ *  caso vazio e a tela fica como sempre foi. */
+function groups(s) {
+  const subs = new Map();
+  for (const t of s.turns) {
+    if (!isSub(t)) continue;
+    const id = t.session ?? '?';
+    const g = subs.get(id) ?? { id, parent: parentOf(t), agent: t.agent ?? null, turns: [], tokens: 0, cost: 0 };
+    g.turns.push(t);
+    g.tokens += t.usage?.total ?? 0;
+    g.cost += t.estimated_cost_usd ?? 0;
+    g.agent = g.agent ?? t.agent ?? null;
+    subs.set(id, g);
+  }
+  const root = s.summary?.session
+    ?? s.turns.find(t => t.root_session)?.root_session
+    ?? s.turns.find(t => !t.parent_session)?.session
+    ?? null;
+  return { root, subs };
+}
+
 function sessionTotals(s) {
   const sum = s.summary ?? {};
   const add = k => s.turns.reduce((a, t) => a + (t.usage?.[k] ?? 0), 0);
@@ -850,6 +898,12 @@ function sessionTotals(s) {
     incomplete: s.turns.filter(t => t.incomplete).length || null,
     by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
     by_agent: buckets(s.turns, t => t.agent ?? null),
+    // Uma linha por conversa arquivada aqui: a raiz e cada subagente que ela
+    // disparou. É o que responde quanto a tool `task` custou.
+    by_session: buckets(s.turns, t => t.session ?? null),
+    sub_turns: s.turns.filter(isSub).length || null,
+    sub_tokens: s.turns.filter(isSub).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
+    sub_cost: s.turns.filter(isSub).reduce((a, t) => a + (t.estimated_cost_usd ?? 0), 0) || null,
     estimated_tokens: sum.estimated_tokens ?? null,
     provider_cost: s.turns.reduce((a, t) => a + (t.provider_cost_usd ?? 0), 0) || null,
     // Turnos cujos tokens o provider não contou: o total é estimado neles.
@@ -880,7 +934,9 @@ function renderSessionSelect() {
   sel.innerHTML = S.sessions.map(s =>
     `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turnos</option>`).join('');
   sel.value = S.sid;
-  sel.onchange = () => { S.sid = sel.value; S.sel = 'overview'; render(); };
+  sel.onchange = () => {
+    S.sid = sel.value; S.sel = 'overview'; S.scope = 'all'; S.collapsed = new Set(); render();
+  };
 }
 
 function renderSide() {
@@ -899,35 +955,95 @@ function renderSide() {
     </div>`;
   side.append(head);
 
+  if (groups(s).subs.size) side.append(scopeBar(groups(s), s));
+
   const list = el('div', 'turnlist');
   const ov = el('button', 'turnitem overview' + (S.sel === 'overview' ? ' active' : ''));
   ov.innerHTML = `<div class="r1"><span class="num">▤</span><span class="ttl">Visão geral da sessão</span></div>`;
   ov.onclick = () => { S.sel = 'overview'; render(); };
   list.append(ov);
 
+  const g = groups(s);
   const q = S.q.toLowerCase();
-  for (const t of turns()) {
-    if (q && !JSON.stringify(t).toLowerCase().includes(q)) continue;
-    const ok = (t.response?.status ?? 0) < 400;
-    const b = el('button', 'turnitem' + (S.sel === t.turn ? ' active' : ''));
-    b.innerHTML = `
-      <div class="r1">
-        <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
-          t.incomplete ? 'style="background:var(--yellow)"' : ''}></span>
-        <span class="num">#${String(t.turn).padStart(2, '0')}</span>
-        <span class="ttl">${esc(turnLabel(t))}</span>
-      </div>
-      <div class="r2">
-        <span>${secs(t.elapsed_seconds)}</span>
-        <span>${nf(t.usage?.total ?? 0)} tk</span>
-        <span>${money(t.estimated_cost_usd)}</span>
-        ${t.reuse && !t.reuse.prefix_stable ? '<span style="color:var(--red)" title="o prefixo do prompt quebrou">⟂</span>' : ''}
-      </div>`;
-    b.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
-    list.append(b);
+  const shown = turns().filter(t => {
+    if (q && !JSON.stringify(t).toLowerCase().includes(q)) return false;
+    if (S.scope === 'root') return !isSub(t);
+    if (S.scope !== 'all') return t.session === S.scope;
+    return true;
+  });
+
+  // Turnos consecutivos da mesma sessão viram um bloco. Uma task pode aparecer
+  // em mais de um: a mãe volta a falar no meio, e o subagente continua depois.
+  const blocks = [];
+  for (const t of shown) {
+    const sub = isSub(t) ? (t.session ?? '?') : null;
+    const last = blocks[blocks.length - 1];
+    if (last && last.sub === sub) last.turns.push(t);
+    else blocks.push({ sub, turns: [t], cont: blocks.some(b => b.sub === sub && sub) });
   }
-  if (list.children.length === 1) list.append(el('div', 'empty', 'Nenhum turno corresponde à busca.'));
+
+  // Um subagente só aparece agrupado na visão completa; escolhido no escopo, a
+  // lista já é dele e o cabeçalho não teria o que separar.
+  for (const block of blocks) {
+    const agrupado = S.scope === 'all' && block.sub;
+    if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
+    if (agrupado && S.collapsed.has(block.sub)) continue;
+    for (const t of block.turns) {
+      const ok = (t.response?.status ?? 0) < 400;
+      const b = el('button', 'turnitem' + (block.sub ? ' sub' : '') + (S.sel === t.turn ? ' active' : ''));
+      b.innerHTML = `
+        <div class="r1">
+          <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
+            t.incomplete ? 'style="background:var(--yellow)"' : ''}></span>
+          <span class="num">#${String(t.turn).padStart(2, '0')}</span>
+          <span class="ttl">${esc(turnLabel(t))}</span>
+        </div>
+        <div class="r2">
+          <span>${secs(t.elapsed_seconds)}</span>
+          <span>${nf(t.usage?.total ?? 0)} tk</span>
+          <span>${money(t.estimated_cost_usd)}</span>
+          ${t.reuse && !t.reuse.prefix_stable ? '<span style="color:var(--red)" title="o prefixo do prompt quebrou">⟂</span>' : ''}
+        </div>`;
+      b.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
+      list.append(b);
+    }
+  }
+  if (!shown.length) list.append(el('div', 'empty', 'Nenhum turno corresponde à busca.'));
   side.append(list);
+}
+
+/** Cabeçalho de um trecho de subagente: recolhe os turnos dele. Os números são
+ *  os do trecho, para bater com o que está logo abaixo; o total da task inteira
+ *  fica no title. */
+function subHeader(g, block) {
+  const closed = S.collapsed.has(g.id);
+  const tokens = block.turns.reduce((a, t) => a + (t.usage?.total ?? 0), 0);
+  const cost = block.turns.reduce((a, t) => a + (t.estimated_cost_usd ?? 0), 0);
+  const b = el('button', 'subhead' + (closed ? ' closed' : ''));
+  b.innerHTML = `<span class="caret">▼</span>
+    <span class="who">task${g.agent ? ': ' + esc(g.agent) : ''}${block.cont ? ' (cont.)' : ''}</span>
+    <span class="n">${block.turns.length} · ${nf(tokens)} tk · ${money(cost)}</span>`;
+  b.title = `subagente ${g.id} — disparado por ${g.parent}`
+    + ` · ${g.turns.length} turnos no total, ${nf(g.tokens)} tk, ${money(g.cost)}`;
+  b.onclick = () => { closed ? S.collapsed.delete(g.id) : S.collapsed.add(g.id); render(); };
+  return b;
+}
+
+/** Seletor de escopo: a pasta inteira, só a conversa principal, ou um subagente. */
+function scopeBar(g, s) {
+  const bar = el('div', 'scopebar');
+  const sel = el('select');
+  const raiz = s.turns.filter(t => !isSub(t)).length;
+  const opts = [
+    ['all', `Tudo · ${s.turns.length} turnos`],
+    ['root', `Só a conversa principal · ${raiz}`],
+    ...[...g.subs.values()].map(x => [x.id, `task${x.agent ? ': ' + x.agent : ''} (${shortId(x.id)}) · ${x.turns.length}`]),
+  ];
+  sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  sel.value = S.scope;
+  sel.onchange = () => { S.scope = sel.value; render(); };
+  bar.append(sel);
+  return bar;
 }
 
 /** Rótulo curto do turno: ferramentas chamadas, ou início do texto. */
@@ -970,7 +1086,7 @@ function renderOverview() {
   // são arquivados junto, então não contam como "outra sessão"; mais de uma
   // conversa de verdade só acontece em captura antiga, e a tela diz isso.
   const ids = [...new Set(s.turns.map(t => t.session).filter(Boolean))];
-  const subs = new Set(s.turns.filter(t => t.parent_session).map(t => t.session));
+  const subs = new Set(s.turns.filter(isSub).map(t => t.session));
   const raiz = ids.filter(x => !subs.has(x));
   const streamed = s.turns.some(t => t._format === 'stream' || t._format === 'audit2');
   wrap.append(el('div', 'thead', `<h1>Visão geral</h1>
@@ -1008,7 +1124,11 @@ function renderOverview() {
     (tot2.prefix_breaks != null
       ? K(nf(tot2.prefix_breaks), 'Quebras de prefixo', tot2.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
     (tot2.resent_tokens != null ? K(nf(tot2.resent_tokens), 'Tokens reenviados', 'var(--yellow)') : '') +
-    (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '')
+    (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '') +
+    // O que a conversa gastou nos subagentes que disparou: já está nos
+    // totais acima, e aqui aparece separado.
+    (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '') +
+    (tot2.sub_cost ? K(money(tot2.sub_cost), 'Custo dos subagentes', 'var(--purple)') : '')
   ));
   const contados = s.turns.filter(t => t.usage?.source === 'provider').length;
   const comUsage = s.turns.filter(t => t.usage && t.usage.total).length;
@@ -1037,7 +1157,9 @@ function renderOverview() {
     const st = t.response?.status; const ok = st == null || st < 400;
     const tr = el('tr');
     tr.style.cursor = 'pointer';
-    tr.innerHTML = `<td class="k">#${t.turn}</td><td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
+    tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
+        ? ` <span class="chip purple" title="subagente ${esc(t.session ?? '?')}">sub</span>` : ''}</td>
+      <td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
       <td>${esc(turnLabel(t))}</td><td class="v">${ctxStats(t).messages.length}</td>
       <td class="v">${nf(u.input)}</td><td class="v" style="color:var(--cyan)">${nf(u.cache_read)}</td>
       <td class="v" style="color:var(--yellow)">${nf(u.cache_write)}</td>
@@ -1056,14 +1178,25 @@ function renderOverview() {
   wrap.append(el('h3', null, 'Turnos'), card);
 
   // Tokens de modelos diferentes não são o mesmo dinheiro nem o mesmo problema.
-  for (const [title, data] of [['Por modelo', tot2.by_model], ['Por agente', tot2.by_agent]]) {
+  const nomeSessao = name => esc(name) + (subs.has(name)
+    ? ' <span class="chip purple">subagente</span>'
+    : ' <span class="chip cyan">raiz</span>');
+  const tabelas = [
+    ['Por modelo', tot2.by_model, null],
+    ['Por agente', tot2.by_agent, null],
+    // Só quando há mais de uma: numa conversa sem subagente a tabela repetiria
+    // os totais gerais.
+    ...(tot2.by_session && Object.keys(tot2.by_session).length > 1
+      ? [['Por sessão', tot2.by_session, nomeSessao]] : []),
+  ];
+  for (const [title, data, deco] of tabelas) {
     if (!data || !Object.keys(data).length) continue;
     const bt = el('table');
     bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th>Turnos</th><th>Input</th>
       <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th><th>Custo</th></tr></thead>`;
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
-      bb.innerHTML += `<tr><td style="white-space:nowrap">${esc(name)}</td>
+      bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
         <td class="num">${nf(v.turns)}</td><td class="num">${nf(v.input)}</td>
         <td class="num" style="color:var(--cyan)">${nf(v.cache_read)}</td>
         <td class="num" style="color:var(--yellow)">${nf(v.cache_write)}</td>
@@ -1096,6 +1229,7 @@ function renderTurnHead(t) {
       <span class="chip">${esc(t.provider)}</span>
       <span class="chip cyan">${esc(apiLabel(t._api))}</span>
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
+      ${isSub(t) ? `<span class="chip purple solid" title="sessão própria na rede (${esc(t.session ?? '?')}), arquivada na pasta de quem a disparou">subagente de ${esc(shortId(parentOf(t)))}</span>` : ''}
       ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
       ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
       ${chip('green', t.estimated_cost_usd != null ? money(t.estimated_cost_usd) + (t._estimated ? '*' : '') : null)}
