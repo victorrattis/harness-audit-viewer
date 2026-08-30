@@ -144,6 +144,10 @@ mark{background:var(--yellow);color:#000;border-radius:2px}
 .txt del{color:var(--faint)}
 .txt .mdh{font-weight:650;color:var(--text);margin:11px 0 3px;letter-spacing:-.2px;line-height:1.35}
 .txt .mdh:first-child{margin-top:0}
+/* Tabela de markdown: rola sozinha quando é larga, em vez de espremer a coluna. */
+.txt table{display:block;width:max-content;max-width:100%;overflow-x:auto;margin:9px 0;font-size:12.5px}
+.txt th,.txt td{padding:5px 10px;white-space:normal;vertical-align:top}
+.txt th{text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--text);border-bottom:1px solid var(--border)}
 
 /* json syntax */
 .j-key{color:var(--cyan)} .j-str{color:var(--green)} .j-num{color:var(--orange)}
@@ -1056,7 +1060,7 @@ function turnLabel(t) {
   const tools = r.blocks.filter(b => b.type === 'tool_use').map(b => b.name);
   if (tools.length) return tools.join(', ');
   const txt = r.blocks.find(b => b.type === 'text')?.text;
-  if (txt) return txt.slice(0, 60).replace(/\s+/g, ' ');
+  if (txt) return plain(txt).slice(0, 60);
   const th = r.blocks.find(b => b.type === 'thinking');
   return th ? 'raciocínio' : 'resposta';
 }
@@ -1322,7 +1326,8 @@ function renderConversation(t) {
       <span class="chip">${c.sys.length} bloco(s)</span>
       <span class="chip">${nf(c.sysChars)} chars ≈ ${nf(Math.round(c.sysChars/4))} tk</span></summary>`;
     const body = el('div', 'cbody');
-    c.sys.forEach((b, i) => body.append(blockCard('text', `system[${i}]${b.cache_control ? ' · cache_control' : ''}`, b.text)));
+    c.sys.forEach((b, i) =>
+      body.append(blockCard('text', `system[${i}]${b.cache_control ? ' · cache_control' : ''}`, b.text, true)));
     d.append(body); wrap.append(d);
   }
 
@@ -1373,9 +1378,22 @@ function messageCard(m, i, isNew, tokens) {
   return d;
 }
 
+/** Markdown vira texto corrido nos rótulos de uma linha: ali não há onde
+ *  renderizar, e um `**assim**` no meio da frase só atrapalha a leitura. */
+const plain = raw => String(raw ?? '')
+  .replace(/```[\s\S]*?```/g, ' ')
+  .replace(/`([^`\n]+)`/g, '$1')
+  .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+  .replace(/^[ \t]*(?:#{1,6}|&gt;|>)\s+/gm, '')
+  .replace(/^[ \t]*(?:[-*+]|\d+[.)])\s+/gm, '')
+  .replace(/(\*\*|~~)(?=\S)([\s\S]*?\S)\1/g, '$2')
+  .replace(/\*(?=\S)([^*\n]*?\S)\*/g, '$1')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 function preview(blocks) {
   for (const b of blocks) {
-    if (b.type === 'text' && b.text) return b.text.slice(0, 120).replace(/\s+/g, ' ');
+    if (b.type === 'text' && b.text) return plain(b.text).slice(0, 120);
     if (b.type === 'tool_use') return `→ ${b.name}(${Object.keys(b.input ?? {}).join(', ')})`;
     if (b.type === 'tool_result') return `← resultado (${String(b.content ?? '').length} chars)`;
   }
@@ -1393,7 +1411,7 @@ function renderBlock(b) {
           <span class="chip">conteúdo não retido · assinatura ${nf(b.signature.length)} chars</span>`));
         return c;
       }
-      return blockCard('thinking', 'thinking · ' + nf((b.thinking || '').length) + ' chars', b.thinking);
+      return blockCard('thinking', 'thinking · ' + nf((b.thinking || '').length) + ' chars', b.thinking, true);
     }
     case 'tool_use': {
       const c = el('div', 'block tool_use');
@@ -1895,10 +1913,14 @@ function md(raw) {
 
   // linhas: o container é pre-wrap, então os blocos são emendados sem \n
   // em volta — senão cada lista abriria uma linha em branco.
+  const lines = s.split(/\r?\n/);
   let html = '', list = null, items = [];
   const flush = () => { if (list) { html += `<${list}>${items.join('')}</${list}>`; items = []; list = null; } };
-  for (const line of s.split(/\r?\n/)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     let m;
+    const tbl = mdTable(lines, i);
+    if (tbl) { flush(); html += tbl.html; i = tbl.end; continue; }
     if ((m = /^[ \t]*(#{1,6})\s+(.*)$/.exec(line))) {
       flush(); html += `<div class="mdh" style="font-size:${Math.max(13, 20 - m[1].length)}px">${m[2]}</div>`;
     } else if ((m = /^[ \t]*[-*+]\s+(.*)$/.exec(line))) {
@@ -1919,9 +1941,36 @@ function md(raw) {
 
   html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codes[+i])
              .replace(/\u0000F(\d+)\u0000/g, (_, i) => fences[+i])
-             .replace(/(<\/(?:pre|ul|ol|blockquote|div)>|<hr>)\n/g, '$1')
+             .replace(/(<\/(?:pre|ul|ol|blockquote|div|table)>|<hr>)\n/g, '$1')
              .replace(/\n$/, '');
   return highlight(html);
+}
+
+/** Tabela no estilo GFM a partir da linha `i`: cabeçalho, linha de alinhamento e
+ *  o corpo até a primeira linha sem `|`. Devolve null quando não é tabela, e o
+ *  índice da última linha consumida quando é. Sem isto uma comparação de preços
+ *  — que é metade do que um modelo escreve — chega como um muro de pipes. */
+function mdTable(lines, i) {
+  const head = lines[i], sep = lines[i + 1];
+  if (!head || !head.includes('|') || !sep) return null;
+  if (!/^[ \t]*\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/.test(sep)) return null;
+  const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  const cols = cells(head);
+  if (cols.length < 2) return null;
+  const align = cells(sep).map(c =>
+    c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : '');
+  const at = j => align[j] ? ` style="text-align:${align[j]}"` : '';
+  let end = i + 1, body = '';
+  // Uma linha em branco, ou sem pipe nenhum, encerra a tabela.
+  while (end + 1 < lines.length && lines[end + 1].trim() && lines[end + 1].includes('|')) {
+    const r = cells(lines[++end]);
+    body += '<tr>' + cols.map((_, j) => `<td${at(j)}>${r[j] ?? ''}</td>`).join('') + '</tr>';
+  }
+  return {
+    end,
+    html: `<table><thead><tr>${cols.map((c, j) => `<th${at(j)}>${c}</th>`).join('')}</tr></thead>`
+      + (body ? `<tbody>${body}</tbody>` : '') + '</table>',
+  };
 }
 
 /** Destaca o termo de busca (não quebra tags). */
