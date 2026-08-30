@@ -6,6 +6,7 @@
 <title>OpenCode · Audit Viewer</title>
 <style>
 :root{
+  color-scheme:dark;
   --bg:#0f1115; --panel:#151821; --panel2:#1b1f2a; --panel3:#212633;
   --border:#2a3040; --text:#e6e9ef; --muted:#8b94a7; --faint:#5c657a;
   --accent:#7aa2f7; --green:#9ece6a; --yellow:#e0af68; --red:#f7768e;
@@ -14,6 +15,7 @@
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 }
 html[data-theme="light"]{
+  color-scheme:light;
   --bg:#f6f7f9; --panel:#fff; --panel2:#f0f2f5; --panel3:#e7eaf0;
   --border:#d8dde6; --text:#1a1d23; --muted:#5c657a; --faint:#8b94a7;
   --accent:#2f6feb; --green:#1a7f37; --yellow:#9a6700; --red:#cf222e;
@@ -34,9 +36,9 @@ header{display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--
 header .logo{font-weight:700;letter-spacing:-.2px;white-space:nowrap}
 header .logo span{color:var(--accent)}
 header .sep{width:1px;height:22px;background:var(--border)}
-header select,header input{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+header select,header input,.scopebar select{background:var(--panel2);border:1px solid var(--border);color:var(--text);
   border-radius:6px;padding:5px 8px;font:inherit;outline:none}
-header input:focus,header select:focus{border-color:var(--accent)}
+header input:focus,header select:focus,.scopebar select:focus{border-color:var(--accent)}
 header .grow{flex:1}
 .btn{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
@@ -71,7 +73,8 @@ header .grow{flex:1}
 .subhead .who{flex:1;font-size:11.5px;color:var(--purple);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .subhead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
 .scopebar{padding:8px 6px 0}
-.scopebar select{width:100%;font-size:11.5px}
+.scopebar select{width:100%;font-size:11.5px;padding:5px 7px}
+.scopebar select:hover{border-color:var(--accent)}
 
 /* ---------- badges / chips ---------- */
 .dot{width:7px;height:7px;border-radius:50%;flex:none}
@@ -838,16 +841,27 @@ function compLegend(comp) {
  *  `by_*` do summary.json, mas derivada dos turnos, então continua certa numa
  *  fatia de sessão e também funciona nos logs antigos, que não têm essas
  *  tabelas. */
+/** Um turno falhou quando o provider respondeu erro ou quando a requisição nem
+ *  chegou a virar resposta — rede cortada, timeout, abort. O segundo caso não
+ *  tem status HTTP nenhum, então olhar só o status esconde a falha. */
+const falhou = t => !!t.error || (t.response?.status != null && t.response.status >= 400);
+
 function buckets(turns, keyOf) {
   const map = new Map();
   const campos = ['input', 'cache_read', 'cache_write', 'output', 'reasoning', 'total'];
   for (const t of turns) {
     const k = keyOf(t); if (k == null) continue;
-    const u = t.usage; if (!u) continue;
-    const b = map.get(k) ?? Object.assign({ turns: 0, cost_usd: 0 }, ...campos.map(f => ({ [f]: 0 })));
+    const u = t.usage;
+    const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0, cost_usd: 0 }, ...campos.map(f => ({ [f]: 0 })));
+    // O turno conta na linha mesmo sem contagem — um turno recusado que some da
+    // tabela vira uma soma que não fecha com o total da sessão. Só os tokens
+    // ficam de fora, porque não houve tokens.
     b.turns++;
-    for (const f of campos) b[f] += u[f] ?? 0;
-    b.cost_usd += t.estimated_cost_usd ?? 0;
+    if (!u) b.sem_contagem++;
+    else {
+      for (const f of campos) b[f] += u[f] ?? 0;
+      b.cost_usd += t.estimated_cost_usd ?? 0;
+    }
     map.set(k, b);
   }
   for (const b of map.values()) {
@@ -912,6 +926,8 @@ function sessionTotals(s) {
     provider_cost: s.turns.reduce((a, t) => a + (t.provider_cost_usd ?? 0), 0) || null,
     // Turnos cujos tokens o provider não contou: o total é estimado neles.
     guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
+    // E os que não têm contagem nenhuma: ficam fora dos tokens e do custo.
+    sem_contagem: s.turns.filter(t => !t.usage?.total).length,
   };
   const elapsed = s.turns.some(t => t.elapsed_seconds != null)
     ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
@@ -919,7 +935,7 @@ function sessionTotals(s) {
   const costs = s.turns.map(t => t.estimated_cost_usd);
   return {
     turns: s.turns.length,
-    errors: s.turns.filter(t => t.response?.status != null && t.response.status >= 400).length,
+    errors: s.turns.filter(falhou).length,
     input: add('input'), output: add('output'),
     cache_read: add('cache_read'), cache_write: add('cache_write'), reasoning: add('reasoning'),
     total_tokens: add('total'),
@@ -993,7 +1009,7 @@ function renderSide() {
     if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
     if (agrupado && S.collapsed.has(block.sub)) continue;
     for (const t of block.turns) {
-      const ok = (t.response?.status ?? 0) < 400;
+      const ok = !falhou(t);
       const b = el('button', 'turnitem' + (block.sub ? ' sub' : '') + (S.sel === t.turn ? ' active' : ''));
       b.innerHTML = `
         <div class="r1">
@@ -1135,16 +1151,19 @@ function renderOverview() {
     (tot2.sub_cost ? K(money(tot2.sub_cost), 'Custo dos subagentes', 'var(--purple)') : '')
   ));
   const contados = s.turns.filter(t => t.usage?.source === 'provider').length;
-  const comUsage = s.turns.filter(t => t.usage && t.usage.total).length;
-  if (comUsage && s.turns.some(t => t.usage?.source)) {
-    const parcial = tot2.guessed > 0;
+  if (s.turns.some(t => t.usage?.source)) {
+    // O denominador é a sessão inteira. Usar só os turnos que tiveram contagem
+    // faz o turno recusado sumir justamente da frase que serve para achá-lo.
+    const parcial = tot2.guessed > 0 || tot2.sem_contagem > 0;
     wrap.append(el('div', parcial ? 'notebox' : 'foot',
       (parcial ? '<b>Contagem parcial:</b> ' : '')
-      + `${contados}/${comUsage} turnos contados pelo provider`
-      + (parcial ? `; nos outros ${tot2.guessed} ele não reportou nada e os tokens foram estimados por caracteres`
-                 : ' — números exatos')
+      + `${contados}/${s.turns.length} turnos contados pelo provider`
+      + (tot2.guessed ? `; em ${tot2.guessed} ele não reportou nada e os tokens foram estimados por caracteres` : '')
+      + (tot2.sem_contagem
+          ? `; ${tot2.sem_contagem} sem contagem nenhuma (recusado pelo provider ou sem resposta), fora dos tokens e do custo`
+          : '')
+      + (!parcial ? ' — números exatos' : '')
       + (tot2.estimated_tokens ? ` · estimados à parte: ${nf(tot2.estimated_tokens.total)} tk` : '')
-      + (tot2.incomplete ? ` · ${tot2.incomplete} turno(s) sem resposta ficaram de fora dos totais` : '')
       + '.'));
   }
   if (tot2.estimated) wrap.append(el('div', 'foot',
@@ -1158,7 +1177,7 @@ function renderOverview() {
   const tb = el('tbody');
   for (const t of s.turns) {
     const u = t.usage ?? {};
-    const st = t.response?.status; const ok = st == null || st < 400;
+    const st = t.response?.status; const ok = !falhou(t);
     const tr = el('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
@@ -1173,7 +1192,7 @@ function renderOverview() {
           : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v">${secs(t.elapsed_seconds)}</td><td class="v">${money(t.estimated_cost_usd)}</td>
       <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
-        t.incomplete ? 'incompleto' : (st ?? esc(t.response?.stop_reason ?? '—'))}</td>`;
+        t.incomplete ? 'incompleto' : (st ?? (t.error ? 'falhou' : esc(t.response?.stop_reason ?? '—')))}</td>`;
     tr.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
     tb.append(tr);
   }
@@ -1201,7 +1220,10 @@ function renderOverview() {
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
       bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
-        <td class="num">${nf(v.turns)}</td><td class="num">${nf(v.input)}</td>
+        <td class="num"${v.sem_contagem
+          ? ` title="${v.sem_contagem} turno(s) sem contagem: entram aqui, mas não têm tokens nem custo"` : ''}>${
+          nf(v.turns)}${v.sem_contagem ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
+        <td class="num">${nf(v.input)}</td>
         <td class="num" style="color:var(--cyan)">${nf(v.cache_read)}</td>
         <td class="num" style="color:var(--yellow)">${nf(v.cache_write)}</td>
         <td class="num" style="color:var(--purple)">${nf(v.output)}</td>
@@ -1227,7 +1249,8 @@ function renderTurnHead(t) {
   h.innerHTML = `<h1>Turno ${t.turn}
       ${st != null ? `<span class="chip ${ok ? 'green' : 'red'} solid">HTTP ${st}</span>` : ''}
       ${t.incomplete ? '<span class="chip yellow solid">incompleto</span>' : ''}
-      ${res.error ? '<span class="chip red solid">erro</span>' : ''}</h1>
+      ${res.error ? '<span class="chip red solid">erro</span>' : ''}
+      ${t.error ? `<span class="chip red solid">falhou · ${esc(t.error.message ?? t.error.name ?? 'erro de rede')}</span>` : ''}</h1>
     <div class="metarow">
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
