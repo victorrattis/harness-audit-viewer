@@ -209,6 +209,30 @@ tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
 .legend b{color:var(--text);font-weight:600}
 .legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
 
+/* ---------- diagnóstico de cache ---------- */
+/* A borda esquerda do painel dá o veredito de relance. */
+.reuse.v-ok{border-left:3px solid var(--green)}
+.reuse.v-cauda{border-left:3px solid var(--yellow)}
+.reuse.v-parcial{border-left:3px solid var(--orange)}
+.reuse.v-quebrou,.reuse.v-falhou{border-left:3px solid var(--red)}
+.reuse.v-expirou{border-left:3px solid var(--purple)}
+.reuse.v-frio{border-left:3px solid var(--cyan)}
+.reuse.v-sem-marcador{border-left:3px solid var(--faint)}
+.reuse.v-sem-dados{border-left:3px solid var(--border)}
+/* Mapa de breakpoints: duas faixas na mesma escala — onde estão os marcadores,
+   e onde a cobrança do provider realmente caiu. */
+.bpwrap{margin:2px 0 18px}
+.bplabel{display:flex;justify-content:space-between;gap:10px;font-family:var(--mono);font-size:10.5px;
+  color:var(--faint);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 5px}
+.bpmap{position:relative;display:flex;height:22px;border-radius:6px;background:var(--panel3)}
+.bpmap i{display:block;height:100%;min-width:0}
+.bpmap i:first-child{border-radius:6px 0 0 6px}
+.bpmap i:last-child{border-radius:0 6px 6px 0}
+.bpmap b.mark{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;background:var(--text);border-radius:1px}
+.bpmap b.mark::after{content:'▲';position:absolute;bottom:-12px;left:50%;transform:translateX(-50%);
+  font-size:9px;line-height:1;color:var(--text)}
+.bpwrap .foot{margin:14px 0 0}
+
 /* ---------- dropzone ---------- */
 #drop{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50}
 #drop .box{max-width:560px;text-align:center;padding:44px;border:2px dashed var(--border);border-radius:16px}
@@ -268,6 +292,15 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt
 const nf = n => (n ?? 0).toLocaleString('pt-BR');
 const money = n => n == null ? '\u2014' : '$' + n.toFixed(4);
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
+/** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
+ *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
+const dur = n => {
+  if (n == null) return '\u2014';
+  if (n < 90) return n.toFixed(n < 10 ? 2 : 0) + 's';
+  if (n < 3600) return Math.floor(n / 60) + 'min' + String(Math.round(n % 60)).padStart(2, '0') + 's';
+  const h = Math.floor(n / 3600);
+  return h >= 24 ? Math.floor(h / 24) + 'd' + (h % 24) + 'h' : h + 'h' + String(Math.floor(n % 3600 / 60)).padStart(2, '0') + 'min';
+};
 const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
 
 /* =========================================================================
@@ -815,6 +848,217 @@ function composition(t) {
 const groupOf = (comp, key) => comp.groups.find(g => g.key === key);
 const pctOf = (v, total) => total ? (v / total * 100) : 0;
 
+/* =========================================================================
+   Diagnóstico de cache: a lógica de cache funcionou neste turno?
+   ========================================================================= */
+
+/** A ordem em que o provider monta o prefixo cacheável — que não é a ordem em
+ *  que a tela mostra as partes. Na Anthropic as tools vêm antes do system, e é
+ *  por isso que um único marcador no bloco de system cobre as tools também. */
+function wireOrder(api) {
+  return api === 'anthropic' || api === 'bedrock'
+    ? ['tools', 'system', 'messages']
+    : ['system', 'tools', 'messages'];
+}
+
+const VERDICT = {
+  'ok':           { label: 'cache ok',     chip: 'green',  glyph: '●' },
+  'cauda':        { label: 'cauda longa',  chip: 'yellow', glyph: '◒' },
+  'parcial':      { label: 'parcial',      chip: 'orange', glyph: '◐' },
+  'quebrou':      { label: 'prefixo quebrou', chip: 'red', glyph: '⟂' },
+  'falhou':       { label: 'não pegou',    chip: 'red',    glyph: '⟂' },
+  'expirou':      { label: 'TTL expirou',  chip: 'purple', glyph: '◔' },
+  'frio':         { label: 'início frio',  chip: 'cyan',   glyph: '○' },
+  'sem-marcador': { label: 'sem marcador', chip: '',       glyph: '·' },
+  'sem-dados':    { label: 'sem dados',    chip: '',       glyph: '·' },
+};
+
+/** O turno anterior da mesma conversa na rede. A cadeia de reuso do plugin é
+ *  por sessão, então um subagente não pode ser diffado contra a mãe. */
+function prevTurn(t) {
+  const list = (S.sessions.find(s => s.turns.includes(t))?.turns) ?? [];
+  let best = null;
+  for (const o of list)
+    if (o !== t && o.turn < t.turn && (o.session ?? null) === (t.session ?? null)
+        && (!best || o.turn > best.turn)) best = o;
+  return best;
+}
+
+/** O prompt na ordem do fio, com o total acumulado até cada parte e onde estão
+ *  os marcadores. O acumulado é o que um marcador ali colocado passa a cobrir —
+ *  é esse número que o turno seguinte pode ler do cache. */
+function promptSeq(t) {
+  if (t._seq) return t._seq;
+  const comp = composition(t);
+  const seq = [];
+  for (const key of wireOrder(t._api)) {
+    const g = groupOf(comp, key);
+    if (!g) continue;
+    for (const p of g.pieces) seq.push({ scope: key, label: g.label, color: g.color, piece: p });
+  }
+  let cum = 0;
+  for (const s of seq) { cum += s.piece.tokens ?? 0; s.end = cum; }
+  const marks = seq.filter(s => s.piece.cache).map(s => ({
+    scope: s.scope, label: s.label, index: s.piece.index, name: s.piece.name,
+    kind: s.piece.cache, prefixTokens: s.end,
+  }));
+  const out = { seq, marks, promptTokens: cum, marksKnown: !!t.prompt || marks.length > 0 };
+  Object.defineProperty(t, '_seq', { value: out, enumerable: false });
+  return out;
+}
+
+/** O trecho da frente deste prompt que é byte a byte o prompt anterior.
+ *
+ *  System e tools vêm antes das mensagens no fio, então mudança neles zera
+ *  tudo; passando por eles, o prefixo vai até a última mensagem que o diff do
+ *  plugin deu por idêntica. O provider casa o prefixo inteiro, não só até onde
+ *  havia um marcador — foi o que os logs mostraram, e é o que esta conta segue. */
+function identicalPrefix(seq, R) {
+  if (!R || R.system_changed || R.tools_changed) return 0;
+  let end = 0;
+  for (const s of seq) {
+    if (s.scope === 'messages' && s.piece.index >= R.stable_messages) break;
+    end = s.end;
+  }
+  return end;
+}
+
+/** Até onde os turnos recentes chegaram a gravar.
+ *
+ *  Um prefixo idêntico só volta do cache se alguém o tiver gravado, e o que se
+ *  grava termina no último marcador. Olhar mais de um turno para trás importa:
+ *  uma requisição que falhou depois de sair ainda deixou gravado o que gravou. */
+function cachedUpTo(t, back = 3) {
+  let best = 0;
+  for (let p = prevTurn(t), n = 0; p && n < back; p = prevTurn(p), n++)
+    for (const m of promptSeq(p).marks) if (m.prefixTokens > best) best = m.prefixTokens;
+  return best;
+}
+
+/** O veredito de cache do turno, com os números que o sustentam.
+ *
+ *  Tudo sai do que o plugin já grava: as marcações `cache_control` por parte
+ *  (`prompt.*[].cache`), o diff `reuse` contra o turno anterior e o `usage` do
+ *  provider. Os três baldes do prompt — `cache_read`, `cache_write` e `input` —
+ *  são exatos; o rateio de tokens por parte é aproximado, então as comparações
+ *  trabalham com uma faixa de tolerância. */
+function cacheAudit(t) {
+  if (t._cache) return t._cache;
+  const u = t.usage ?? {};
+  const R = t.reuse;
+  const { seq, marks, promptTokens, marksKnown } = promptSeq(t);
+  const cr = u.cache_read ?? 0, cw = u.cache_write ?? 0;
+
+  // O TTL não vem por marcador, mas o provider diz em que janela gravou.
+  const ttlSeconds = ((u.details ?? {}).cache_write_1h ?? 0) > 0 ? 3600 : 300;
+  const prev = prevTurn(t);
+  const gapSeconds = (prev?.started_at && t.started_at)
+    ? (new Date(t.started_at) - new Date(prev.started_at)) / 1000 : null;
+  const stale = gapSeconds != null && gapSeconds > ttlSeconds;
+
+  // `input` é, por definição, o que ficou depois do último marcador: o pedaço
+  // que se paga inteiro em todo turno, faça o cache o que fizer.
+  const tailTokens = u.input ?? 0;
+  const afterLastMark = marks.length ? promptTokens - marks[marks.length - 1].prefixTokens : promptTokens;
+
+  // O que estava em cache e podia ter sido lido aqui — e quanto disso escapou.
+  //
+  // Comparar `cache_write` com o conteúdo novo do turno NÃO serve: o esquema de
+  // marcadores rolantes grava, de propósito, um pedaço a mais do que apareceu
+  // de novo, e isso acusaria desperdício em turno perfeitamente são. O que vale
+  // é o encontro de duas coisas: até onde este prompt ainda é o anterior, e até
+  // onde o anterior chegou a gravar. Conferido contra os logs, esse mínimo cai
+  // a menos de dez tokens do `cache_read` que o provider reportou.
+  const offered = cachedUpTo(t);
+  const ident = identicalPrefix(seq, R);
+  const reusable = Math.min(ident, offered);
+  // Sem contagem do provider não há o que comparar: `cr` seria zero por falta de
+  // dado, não por falha, e o turno acusaria a sessão inteira de perder cache.
+  const lost = u.total ? Math.max(0, reusable - cr) : 0;
+  // O que estava gravado e deixou de valer porque o histórico foi reescrito. É
+  // o preço da mutação, distinto do cache que estava lá e não foi lido: quando
+  // a divergência é numa mensagem antiga, tudo que vinha depois dela cai junto.
+  const broken = (u.total && R && !R.prefix_stable) ? Math.max(0, offered - reusable) : 0;
+
+  // Uns e outros foram cobrados como escrita ou como input; de um jeito ou de
+  // outro, custaram mais do que a leitura que deveriam ter sido.
+  const per = t.cost?.per_million;
+  const p = priceOf(t.model);
+  const wIn = per?.input ?? (p ? p.in : null);
+  const wWrite = per?.cache_write ?? (p ? p.in * 1.25 : null);
+  const wRead = per?.cache_read ?? (p ? p.in * 0.1 : null);
+  const priced = n => {
+    if (!n || wIn == null || wWrite == null || wRead == null) return null;
+    const asWrite = Math.min(n, cw);
+    return (asWrite * (wWrite - wRead) + (n - asWrite) * (wIn - wRead)) / 1e6;
+  };
+  const lostUsd = priced(lost), brokenUsd = priced(broken);
+
+  const denom = cr + cw + (u.input ?? 0);
+  const hitRate = denom ? cr / denom : null;
+
+  // Tolerância. Duas fontes de ruído: o rateio de tokens por parte é
+  // aproximado, e o provider serve o cache em blocos, então a última fração de
+  // bloco do prefixo pode não voltar. Nos logs o resíduo nunca passou de um
+  // bloco, e é essa a margem — abaixo dela não há o que acusar.
+  const tol = Math.max(2048, reusable * 0.02);
+  const coldReason = !prev ? 'primeiro turno da conversa'
+    : prev.model !== t.model ? `o modelo mudou (${prev.model} → ${t.model}) e o cache é por modelo`
+    : prev.agent !== t.agent ? `o agente mudou (${prev.agent ?? '—'} → ${t.agent ?? '—'}): outro prompt`
+    : null;
+
+  let verdict, reason;
+  if (!u.total) {
+    verdict = 'sem-dados';
+    reason = 'o provider não contou os tokens deste turno';
+  } else if (!marks.length && !cw) {
+    verdict = 'sem-marcador';
+    reason = cr > 0
+      ? 'o request não pediu cache — o que foi reaproveitado é cache implícito do provider'
+      : 'o request não pediu cache algum: todo o prompt é pago a preço cheio';
+  } else if (coldReason) {
+    verdict = 'frio';
+    reason = coldReason;
+  } else if (!cr && stale && offered) {
+    // Vale mesmo sem o diff do plugin: houve marcador lá atrás, o intervalo
+    // passou da janela, e não voltou nada. É a assinatura de TTL vencido.
+    verdict = 'expirou';
+    reason = `${dur(gapSeconds)} desde o turno anterior, além da janela de ${ttlSeconds === 3600 ? '1h' : '5min'}`
+      + ` — ${nf(offered)} tk estavam gravados e caducaram`;
+  } else if (!R) {
+    verdict = 'frio';
+    reason = 'não há turno anterior comparável para diffar';
+  } else if (!R.prefix_stable) {
+    verdict = 'quebrou';
+    reason = (R.system_changed && R.tools_changed ? 'o system e as tools mudaram'
+      : R.system_changed ? 'o bloco de system mudou'
+      : R.tools_changed ? 'as tools mudaram'
+      : `a mensagem #${R.changed_at} divergiu do turno anterior`)
+      + (broken ? ` — ${nf(broken)} tk gravados deixaram de valer` : '');
+  } else if (!cr) {
+    verdict = 'falhou';
+    reason = 'o prefixo estava intacto e mesmo assim nada voltou do cache';
+  } else if (lost > tol) {
+    verdict = 'parcial';
+    reason = `o turno anterior deixou ${nf(reusable)} tk marcados e só ${nf(cr)} voltaram`;
+  } else if (promptTokens && tailTokens > promptTokens * 0.05) {
+    verdict = 'cauda';
+    reason = 'o último marcador está longe do fim: essa cauda se repaga inteira todo turno';
+  } else {
+    verdict = 'ok';
+    reason = 'leu de volta tudo que o turno anterior deixou marcado';
+  }
+
+  const audit = {
+    verdict, reason, seq, marks, marksUsed: marks.length, marksLimit: 4, marksKnown,
+    promptTokens, tailTokens, afterLastMark,
+    offered, ident, reusable, lost, lostUsd, broken, brokenUsd,
+    gapSeconds, ttlSeconds, hitRate,
+  };
+  Object.defineProperty(t, '_cache', { value: audit, enumerable: false });
+  return audit;
+}
+
 /** Barra empilhada system / tools / mensagens. */
 function stackBar(comp) {
   const bar = el('div', 'stack');
@@ -910,9 +1154,20 @@ function sessionTotals(s) {
   // Tudo derivado dos próprios turnos: os campos do summary.json valem para o
   // processo inteiro, e uma pasta pode conter mais de uma sessão.
   const comReuso = s.turns.filter(t => t.reuse);
+  const audits = s.turns.map(t => cacheAudit(t));
+  // Turnos que tinham cache a avaliar: um início frio ou um dialeto que não
+  // marca nada não é falha, e entrar na conta só afundaria a média.
+  const julgados = audits.filter(a => !['frio', 'sem-marcador', 'sem-dados'].includes(a.verdict));
   const nov = {
     prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
     resent_tokens: comReuso.length ? comReuso.reduce((a, t) => a + (t.reuse.resent_tokens ?? 0), 0) : null,
+    cache_lost: audits.reduce((a, x) => a + x.lost, 0),
+    cache_lost_usd: audits.reduce((a, x) => a + (x.lostUsd ?? 0), 0),
+    cache_broken: audits.reduce((a, x) => a + x.broken, 0),
+    cache_broken_usd: audits.reduce((a, x) => a + (x.brokenUsd ?? 0), 0),
+    cache_tail_avg: audits.length ? audits.reduce((a, x) => a + x.tailTokens, 0) / audits.length : 0,
+    cache_ok: julgados.length ? julgados.filter(a => a.verdict === 'ok').length / julgados.length : null,
+    cache_verdicts: audits.reduce((a, x) => (a[x.verdict] = (a[x.verdict] ?? 0) + 1, a), {}),
     incomplete: s.turns.filter(t => t.incomplete).length || null,
     by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
     by_agent: buckets(s.turns, t => t.agent ?? null),
@@ -1022,7 +1277,10 @@ function renderSide() {
           <span>${secs(t.elapsed_seconds)}</span>
           <span>${nf(t.usage?.total ?? 0)} tk</span>
           <span>${money(t.estimated_cost_usd)}</span>
-          ${t.reuse && !t.reuse.prefix_stable ? '<span style="color:var(--red)" title="o prefixo do prompt quebrou">⟂</span>' : ''}
+          ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
+            if (A.verdict === 'ok') return '';         // o caso bom não precisa de marca
+            return `<span style="color:${V.chip ? `var(--${V.chip})` : 'var(--faint)'}"
+              title="${esc(V.label)} — ${esc(A.reason)}">${V.glyph}</span>`; })()}
         </div>`;
       b.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
       list.append(b);
@@ -1129,7 +1387,10 @@ function renderOverview() {
     cr: a.cr + (t.usage?.cache_read ?? 0), cw: a.cw + (t.usage?.cache_write ?? 0),
     r: a.r + (t.usage?.reasoning ?? 0),
   }), { i: 0, o: 0, cr: 0, cw: 0, r: 0 });
-  const cacheRate = (tot.cr + tot.i) ? (tot.cr / (tot.cr + tot.i) * 100) : 0;
+  // O prompt tem três baldes e os três entram na conta. Deixar `cache_write` de
+  // fora do denominador faria uma sessão que regrava o prefixo a cada turno
+  // parecer perfeita — que é justamente o que se quer enxergar aqui.
+  const cacheRate = (tot.cr + tot.cw + tot.i) ? (tot.cr / (tot.cr + tot.cw + tot.i) * 100) : 0;
 
   wrap.append(el('div', 'grid2',
     K(nf(tot2.turns), 'Turnos') +
@@ -1137,7 +1398,23 @@ function renderOverview() {
     K(nf(tot2.total_tokens), 'Tokens totais') +
     K((tot2.elapsed_approx ? '~' : '') + secs(tot2.elapsed_seconds),
        tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
-    K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache', 'var(--cyan)') +
+    K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache',
+      cacheRate > 90 ? 'var(--green)' : cacheRate > 50 ? 'var(--yellow)' : 'var(--red)') +
+    (tot2.cache_ok != null
+      ? K((tot2.cache_ok * 100).toFixed(0) + '%', 'Turnos com cache ok',
+          tot2.cache_ok > 0.9 ? 'var(--green)' : tot2.cache_ok > 0.6 ? 'var(--yellow)' : 'var(--red)') : '') +
+    // O que estava em cache, continuava válido, e mesmo assim foi cobrado de
+    // novo: o custo direto das falhas de cache.
+    (tot2.cache_lost
+      ? K(nf(tot2.cache_lost) + (tot2.cache_lost_usd ? ` · ${money(tot2.cache_lost_usd)}` : ''),
+          'Cache perdido', 'var(--red)') : '') +
+    // O preço de reescrever o histórico: o que estava gravado e foi invalidado.
+    (tot2.cache_broken
+      ? K(nf(tot2.cache_broken) + (tot2.cache_broken_usd ? ` · ${money(tot2.cache_broken_usd)}` : ''),
+          'Cache invalidado por mutação', 'var(--red)') : '') +
+    (tot2.cache_tail_avg >= 1
+      ? K(nf(Math.round(tot2.cache_tail_avg)), 'Cauda não cacheada / turno',
+          tot2.cache_tail_avg > 1000 ? 'var(--red)' : 'var(--yellow)') : '') +
     K(nf(tot2.errors), 'Erros', (tot2.errors ? 'var(--red)' : 'var(--green)')) +
     // Cada quebra de prefixo é um cache miss no histórico inteiro: é o primeiro
     // lugar para olhar quando o custo sobe.
@@ -1150,6 +1427,22 @@ function renderOverview() {
     (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '') +
     (tot2.sub_cost ? K(money(tot2.sub_cost), 'Custo dos subagentes', 'var(--purple)') : '')
   ));
+
+  // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
+  const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
+  if (vs.length) {
+    const bar = el('div', 'stack');
+    bar.innerHTML = vs.map(([k, n]) => {
+      const w = pctOf(n, s.turns.length), V = VERDICT[k];
+      const c = V.chip ? `var(--${V.chip})` : 'var(--faint)';
+      return `<i style="width:${w}%;background:${c}" title="${esc(V.label)}: ${n} turno(s)">${
+        w > 11 ? esc(V.label) : ''}</i>`;
+    }).join('');
+    wrap.append(bar, el('div', 'legend', vs.map(([k, n]) => {
+      const V = VERDICT[k], c = V.chip ? `var(--${V.chip})` : 'var(--faint)';
+      return `<span><em style="background:${c}"></em>${esc(V.label)} <b>${n}</b></span>`;
+    }).join('')));
+  }
   const contados = s.turns.filter(t => t.usage?.source === 'provider').length;
   if (s.turns.some(t => t.usage?.source)) {
     // O denominador é a sessão inteira. Usar só os turnos que tiveram contagem
@@ -1263,6 +1556,8 @@ function renderTurnHead(t) {
       ${chip('green', t.provider_cost_usd != null ? 'provider ' + money(t.provider_cost_usd) : null)}
       ${u.source === 'estimated' ? '<span class="chip yellow solid">tokens estimados</span>'
         : u.source === 'provider' ? '<span class="chip green">contagem do provider</span>' : ''}
+      ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
+        return `<span class="chip ${V.chip} solid" title="${esc(A.reason)}">${V.glyph} ${esc(V.label)}</span>`; })()}
       ${chip('cyan', t.cache_hit_rate != null ? 'cache ' + (t.cache_hit_rate * 100).toFixed(1) + '%' : null)}
       <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span>
       ${chip('', res.bytes != null ? bytes(res.bytes) : null)}
@@ -1526,34 +1821,136 @@ function syncExpanders() {
 }
 $('#content').addEventListener('toggle', () => requestAnimationFrame(syncExpanders), true);
 
-/** Faixa de reuso: quanto deste prompt é o prompt anterior, byte a byte.
- *  É o número que decide o custo — um prefixo estável é lido do cache, um
- *  prefixo quebrado é relido inteiro. */
-function reusePanel(t, R, comp) {
-  const stable = R.prefix_stable;
-  const box = el('div', 'reuse ' + (stable ? 'stable' : 'broke'));
-  const resent = R.resent_tokens ?? Math.round((R.resent_chars ?? 0) / 4);
-  const fresh = R.new_tokens ?? Math.round((R.new_chars ?? 0) / 4);
-  const hit = t.cache_hit_rate;
+/** Rodapé por veredito: o que aquele diagnóstico quer dizer, e o que olhar. */
+const VERDICT_FOOT = {
+  'ok': 'O turno só acrescentou ao fim do contexto: tudo que o provider podia reaproveitar continua lá, '
+      + 'na mesma ordem, e ele devolveu do cache.',
+  'cauda': 'O prefixo se manteve, mas o último marcador está longe do fim do prompt. O que vem depois dele '
+      + 'nunca entra em cache: é pago a preço cheio neste turno e em todos os próximos. Mover o marcador '
+      + 'para o fim das mensagens resolve.',
+  'parcial': 'O prefixo se manteve e o cache respondeu, mas por menos do que o turno anterior tinha deixado '
+      + 'gravado. A diferença estava lá, válida, e foi cobrada de novo. Costuma ser marcador que não avançou '
+      + 'junto com a conversa, ou uma marcação que mudou de escopo entre um turno e outro.',
+  'quebrou': 'Algo antes do fim do contexto mudou, então o cache do prefixo inteiro foi perdido — é aqui que '
+      + 'o custo escapa. A causa quase sempre é reescrever uma mensagem já enviada (mover ou remover um '
+      + 'system-reminder, por exemplo); o certo é só acrescentar ao fim. Marcadores que apenas mudam de '
+      + 'lugar não contam como quebra.',
+  'falhou': 'O prefixo estava intacto e ainda assim nada voltou do cache. Vale conferir se o marcador saiu no '
+      + 'request, se o modelo é o mesmo e se a janela do TTL não fechou.',
+  'expirou': 'O prefixo estava intacto, mas o intervalo entre os turnos passou da janela do cache e a entrada '
+      + 'foi descartada. Um TTL mais longo (1h) evita isso em sessões com pausas.',
+  'frio': 'Não havia o que reaproveitar: é o começo de uma cadeia de cache, não uma falha. O que este turno '
+      + 'gravar é o que os próximos vão ler.',
+  'sem-marcador': 'O request não trouxe nenhum `cache_control`, então não há cache explícito para avaliar. '
+      + 'Todo o prompt é cobrado como input a cada turno, salvo o que o provider cachear por conta própria.',
+  'sem-dados': 'Sem contagem de tokens do provider para este turno, não há como julgar o cache.',
+};
+
+/** Painel de cache: o veredito do turno e os números que o sustentam.
+ *
+ *  Junta o diff de prefixo (quanto deste prompt é o anterior, byte a byte) com
+ *  os três baldes que o provider cobra — lido do cache, gravado agora, e a
+ *  cauda paga cheia — porque é a combinação dos dois que diz se a lógica de
+ *  cache funcionou. Um prefixo estável com marcador no lugar errado ainda
+ *  desperdiça dinheiro, e só a comparação denuncia. */
+function cachePanel(t) {
+  const A = cacheAudit(t);
+  const V = VERDICT[A.verdict];
+  const R = t.reuse;
+  const u = t.usage ?? {};
+  const box = el('div', 'reuse v-' + A.verdict);
+  const col = V.chip ? `var(--${V.chip})` : 'var(--muted)';
+  const resent = R ? (R.resent_tokens ?? Math.round((R.resent_chars ?? 0) / 4)) : null;
+  const fresh = R ? (R.new_tokens ?? Math.round((R.new_chars ?? 0) / 4)) : null;
+
   box.innerHTML =
-    `<span class="lead" style="color:${stable ? 'var(--green)' : 'var(--red)'}">
-       ${stable ? '✓ prefixo estável' : '✗ prefixo quebrou'}</span>
-     <span class="chip">vs. turno ${R.previous_turn}</span>
-     <span class="chip cyan">${nf(R.stable_messages)} ${R.stable_messages === 1 ? 'msg idêntica' : 'msgs idênticas'} · ${nf(resent)} tk reenviados</span>
-     <span class="chip green">${nf(R.added_messages)} ${R.added_messages === 1 ? 'msg nova' : 'msgs novas'} · ${nf(fresh)} tk</span>
-     ${R.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg sumiram</span>` : ''}
-     ${R.changed_at != null ? `<span class="chip red solid">divergiu na msg #${R.changed_at}</span>` : ''}
-     ${R.system_changed ? '<span class="chip red solid">system mudou</span>' : ''}
-     ${R.tools_changed ? '<span class="chip red solid">tools mudaram</span>' : ''}
-     ${hit != null ? `<span class="chip ${hit > 0.5 ? 'green' : 'yellow'}">cache ${(hit * 100).toFixed(1)}%</span>` : ''}`;
+    `<span class="lead" style="color:${col}">${V.glyph} ${esc(V.label)}</span>
+     <span class="chip">${esc(A.reason)}</span>
+     ${R ? `<span class="chip">vs. turno ${R.previous_turn}</span>` : ''}
+     ${R ? `<span class="chip cyan">${nf(R.stable_messages)} ${R.stable_messages === 1 ? 'msg idêntica' : 'msgs idênticas'} · ${nf(resent)} tk reenviados</span>` : ''}
+     ${R ? `<span class="chip green">${nf(R.added_messages)} ${R.added_messages === 1 ? 'msg nova' : 'msgs novas'} · ${nf(fresh)} tk</span>` : ''}
+     ${R?.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg sumiram</span>` : ''}
+     ${R?.changed_at != null ? `<span class="chip red solid">divergiu na msg #${R.changed_at}</span>` : ''}
+     ${R?.system_changed ? '<span class="chip red solid">system mudou</span>' : ''}
+     ${R?.tools_changed ? '<span class="chip red solid">tools mudaram</span>' : ''}
+     ${A.reusable > 0 ? `<span class="chip ${A.lost > 0 ? 'yellow' : 'green'}" title="maior prefixo que o turno anterior deixou gravado e que continua idêntico aqui">${nf(A.reusable)} tk reaproveitáveis</span>` : ''}
+     ${A.lost > 0 ? `<span class="chip red solid" title="estavam em cache, continuavam válidos, e mesmo assim foram cobrados de novo">perdidos ${nf(A.lost)} tk${A.lostUsd != null ? ' · ' + money(A.lostUsd) : ''}</span>` : ''}
+     ${A.broken > 0 ? `<span class="chip red solid" title="estavam gravados no turno anterior e foram invalidados pela reescrita do histórico">invalidados ${nf(A.broken)} tk${A.brokenUsd != null ? ' · ' + money(A.brokenUsd) : ''}</span>` : ''}
+     ${A.tailTokens > 0 ? `<span class="chip ${A.verdict === 'cauda' ? 'yellow solid' : 'yellow'}" title="prompt depois do último marcador: pago a preço cheio em todo turno">cauda ${nf(A.tailTokens)} tk</span>` : ''}
+     ${A.marksKnown ? `<span class="chip ${A.marksUsed > A.marksLimit ? 'red solid' : A.marksUsed ? '' : 'yellow'}">${A.marksUsed}/${A.marksLimit} breakpoints</span>` : '<span class="chip yellow">marcadores não registrados</span>'}
+     ${u.cache_write ? `<span class="chip">TTL ${A.ttlSeconds === 3600 ? '1h' : '5min'}</span>` : ''}
+     ${A.gapSeconds != null ? `<span class="chip" title="intervalo desde o turno anterior desta conversa">gap ${dur(A.gapSeconds)}</span>` : ''}
+     ${A.hitRate != null ? `<span class="chip ${A.hitRate > 0.9 ? 'green' : A.hitRate > 0.5 ? 'yellow' : 'red'}" title="cache_read / (cache_read + cache_write + input)">aproveitamento ${(A.hitRate * 100).toFixed(1)}%</span>` : ''}`;
+
   const foot = el('div', 'foot');
   foot.style.margin = '-6px 0 14px';
-  foot.innerHTML = stable
-    ? 'O turno só acrescentou ao fim do contexto: tudo que o provider podia reaproveitar continua lá, na mesma ordem.'
-    : 'Algo antes do fim do contexto mudou, então o cache do prefixo inteiro foi perdido — é aqui que o custo escapa. '
-      + 'Marcadores de cache que apenas mudam de lugar não contam como quebra.';
+  foot.textContent = VERDICT_FOOT[A.verdict] ?? '';
   const wrap = el('div');
   wrap.append(box, foot);
+  return wrap;
+}
+
+/** Mapa de breakpoints: duas faixas na mesma escala.
+ *
+ *  Em cima, o prompt na ordem em que o provider monta o prefixo, com um ▲ em
+ *  cada `cache_control`. Embaixo, os três baldes que ele cobrou. Onde as duas
+ *  faixas discordam está o problema: se a fronteira do amarelo cai muito antes
+ *  do último ▲, o marcador não está fazendo o trabalho que promete. */
+function breakpointMap(t) {
+  const A = cacheAudit(t);
+  const wrap = el('div', 'bpwrap');
+  if (!A.seq.length || !A.promptTokens) return wrap;
+  const u = t.usage ?? {};
+  const pct = v => pctOf(v, A.promptTokens);
+
+  wrap.append(el('div', 'bplabel',
+    `<span>marcadores no prompt · ordem do fio (${wireOrder(t._api).join(' → ')})</span>
+     <span>${nf(A.promptTokens)} tk</span>`));
+
+  const bar = el('div', 'bpmap');
+  bar.innerHTML = A.seq.map(s => {
+    const w = pct(s.piece.tokens ?? 0);
+    const who = `${s.label} #${s.piece.index}${s.piece.name ? ' · ' + s.piece.name : ''}`;
+    return `<i style="width:${w}%;background:${s.color};opacity:${s.piece.cache ? 1 : .5}"
+      title="${esc(who)} · ${nf(s.piece.tokens)} tk · ${w.toFixed(1)}% do prompt${s.piece.cache ? ' · marcador aqui' : ''}"></i>`;
+  }).join('') + A.marks.map(m =>
+    `<b class="mark" style="left:${pct(m.prefixTokens)}%"
+       title="breakpoint em ${esc(m.label)} #${m.index} — cobre ${nf(m.prefixTokens)} tk (${pct(m.prefixTokens).toFixed(1)}% do prompt)"></b>`
+  ).join('');
+  wrap.append(bar);
+
+  // A cobrança real, na mesma escala: até onde o provider leu do cache, o que
+  // ele gravou agora, e a cauda que sobrou fora de qualquer marcador.
+  wrap.append(el('div', 'bplabel',
+    `<span>como o provider cobrou</span>
+     <span>${A.afterLastMark > 0 && A.marks.length ? nf(A.afterLastMark) + ' tk depois do último ▲' : '—'}</span>`));
+  const zones = el('div', 'bpmap');
+  const z = [
+    ['cache read', u.cache_read ?? 0, 'var(--cyan)'],
+    ['cache write', u.cache_write ?? 0, 'var(--yellow)'],
+    ['input', u.input ?? 0, 'var(--red)'],
+  ];
+  zones.innerHTML = z.map(([label, v, c]) => v
+    ? `<i style="width:${pct(v)}%;background:${c}" title="${label}: ${nf(v)} tk (${pct(v).toFixed(1)}% do prompt)"></i>` : ''
+  ).join('');
+  wrap.append(zones);
+  wrap.append(el('div', 'legend', z.map(([label, v, c]) =>
+    `<span><em style="background:${c}"></em>${label} <b>${nf(v)}</b></span>`).join('')));
+
+  if (!A.marksKnown)
+    wrap.append(el('div', 'foot', 'Este log não registra onde estavam os marcadores de cache, '
+      + 'então a faixa de cima sai sem os ▲. A cobrança embaixo continua valendo.'));
+  else if (!A.marksUsed)
+    wrap.append(el('div', 'foot', 'Nenhum marcador de cache neste request: a faixa de cima não tem ▲ porque '
+      + 'não há o que marcar. Sem eles o provider cobra o prompt inteiro como input a cada turno, salvo o que '
+      + 'ele resolver cachear por conta própria.'));
+  else if (A.marksUsed > A.marksLimit)
+    wrap.append(el('div', 'foot', `São ${A.marksUsed} marcadores num limite de ${A.marksLimit}: `
+      + 'a Anthropic ignora os excedentes, então os primeiros podem não estar valendo nada.'));
+  else if (A.marksUsed && A.marksUsed < A.marksLimit)
+    wrap.append(el('div', 'foot', `Sobra${A.marksLimit - A.marksUsed > 1 ? 'm' : ''} ${A.marksLimit - A.marksUsed} breakpoint${A.marksLimit - A.marksUsed > 1 ? 's' : ''} do limite de ${A.marksLimit}. `
+      + 'Um marcador extra logo ao fim das tools isola o bloco estável, para que uma mudança no fim do '
+      + 'system não obrigue a regravar os schemas junto.'));
   return wrap;
 }
 
@@ -1563,7 +1960,7 @@ function renderComposition(t) {
   const comp = composition(t);
   const u = t.usage ?? {};
 
-  if (t.reuse) wrap.append(reusePanel(t, t.reuse, comp));
+  wrap.append(cachePanel(t), breakpointMap(t));
 
   const head = el('div', 'metarow');
   head.innerHTML =
