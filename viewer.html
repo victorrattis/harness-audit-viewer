@@ -206,6 +206,10 @@ td.num{font-family:var(--mono);text-align:right;white-space:nowrap;width:1%}
 tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--panel2)}
 .card.tablecard{overflow-x:auto}
 tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
+/* A faixa que separa um pedido do usuário do seguinte na tabela de turnos. */
+tr.pedido td{background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:11px;
+  padding-top:9px;padding-bottom:5px;border-top:1px solid var(--border)}
+tr.pedido b{color:var(--text)}
 .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
 .legend b{color:var(--text);font-weight:600}
 .legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
@@ -297,8 +301,14 @@ const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : n
 /** A conta do GitHub Copilot é feita em créditos, e um crédito é um centavo de
  *  dólar. Os preços da tabela são créditos por 1M de tokens. */
 const CREDIT_USD = 0.01;
-const money = (n, d = 2) => n == null ? '\u2014'
-  : 'US$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
+/** Dinheiro. Abaixo de um centavo mostra quatro casas em vez de "US$ 0,00":
+ *  agora que o custo vale para qualquer provedor, e n\u00e3o s\u00f3 para os cr\u00e9ditos do
+ *  Copilot, uma sess\u00e3o curta cabe inteira dentro do arredondamento. */
+const money = (n, d) => n == null ? '\u2014'
+  : 'US$ ' + n.toLocaleString('pt-BR', (() => {
+      const c = d ?? (n > 0 && n < 0.01 ? 4 : 2);
+      return { minimumFractionDigits: c, maximumFractionDigits: c };
+    })());
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
 /** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
  *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
@@ -384,7 +394,49 @@ function copilotCost(t) {
 
 /** Turno do Copilot que ficou de fora da conta por falta de preço. Sem `usage`
  *  não conta como sem preço: ali não havia tokens para cobrar. */
-const semPreco = t => isCopilot(t) && !!t.usage && copilotPrice(t.model, 0) == null;
+const semPreco = t => isCopilot(t) && !!t.usage && !t.rates_per_million && copilotPrice(t.model, 0) == null;
+
+/* =========================================================================
+   Custo do turno
+   =========================================================================
+ *  Duas fontes, nesta ordem.
+ *
+ *  A primeira é o próprio turno: desde a v2 o plugin grava `rates_per_million`,
+ *  a tarifa que o catálogo do opencode dava para aquele modelo no instante em
+ *  que a requisição saiu. É a tarifa do provedor, vale para todos eles, e não
+ *  envelhece porque é um fato daquele momento — não uma tabela nossa tentando
+ *  acompanhar o mercado.
+ *
+ *  A segunda é a tabela de créditos do Copilot, que continua aqui porque ali o
+ *  dinheiro é outro: o que sai do pacote do plano é a revenda, não a tarifa de
+ *  lista do provedor. Log antigo, sem tarifa gravada, também cai nela.
+ *
+ *  Sem nenhuma das duas o turno não entra na conta, e a tela diz quais ficaram
+ *  de fora — um total incompleto que se apresenta como completo é pior que
+ *  total nenhum. */
+function custo(t) {
+  const u = t.usage; if (!u) return null;
+  const r = t.rates_per_million;
+  if (r) {
+    // `reasoning` não entra somado: já está dentro de `output`.
+    return ((u.input ?? 0) * (r.input ?? 0)
+          + (u.cache_read ?? 0) * (r.cache_read ?? 0)
+          + (u.cache_write ?? 0) * (r.cache_write ?? r.input ?? 0)
+          + (u.output ?? 0) * (r.output ?? 0)) / 1e6;
+  }
+  return copilotCost(t);
+}
+
+/** De onde saiu o custo desta sessão, para a tela poder nomear a moeda. */
+function fonteCusto(turns) {
+  if (turns.some(t => t.rates_per_million && t.usage)) return 'catálogo do opencode';
+  if (turns.some(t => isCopilot(t) && t.usage)) return 'créditos do Copilot';
+  return null;
+}
+
+/* Os dois diários que o plugin mantém ao lado dos turnos. */
+const TOOL_FILE = 'tools.jsonl';
+const EVENT_FILE = 'events.jsonl';
 
 /* =========================================================================
    Carregamento (drag&drop / picker / http auto)
@@ -616,6 +668,20 @@ function ingest(files) {                       // files: [{path, text, mtime}]
       stores.set(sid, store);
       continue;
     }
+    // Execuções de ferramenta e eventos de sessão: o que o plugin sabe por
+    // dentro do opencode e nunca passa pela rede. Pertencem à sessão, não a um
+    // turno — uma ferramenta roda entre dois turnos, não dentro de um.
+    if (name === TOOL_FILE || name === EVENT_FILE) {
+      if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
+      const alvo = map.get(sid);
+      const chave = name === TOOL_FILE ? 'tools' : 'events';
+      alvo[chave] = alvo[chave] ?? [];
+      for (const line of f.text.split('\n')) {
+        if (!line) continue;
+        try { alvo[chave].push(JSON.parse(line)); } catch { /* linha truncada */ }
+      }
+      continue;
+    }
     if (!name.endsWith('.json') || name === 'latest.json') continue;
     let data; try { data = JSON.parse(f.text); } catch { continue; }
     if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
@@ -646,9 +712,12 @@ function ingest(files) {                       // files: [{path, text, mtime}]
   renderSessionSelect(); render();
 }
 
-/** O que vale a pena ler de uma pasta de log: os turnos e o depósito de peças
- *  deles. `turns.jsonl` é índice, o mesmo que já está nos turnos. */
-const queremos = name => name.endsWith('.json') || name === 'pieces.jsonl';
+/** O que vale a pena ler de uma pasta de log: os turnos, o depósito de peças
+ *  deles, e os dois diários que o plugin mantém ao lado — execuções de
+ *  ferramenta e eventos de sessão. `turns.jsonl` é índice, o mesmo que já está
+ *  nos turnos. */
+const queremos = name =>
+  name.endsWith('.json') || name === 'pieces.jsonl' || name === TOOL_FILE || name === EVENT_FILE;
 
 async function readEntry(entry, out, base) {
   if (entry.isFile) {
@@ -1178,7 +1247,7 @@ function buckets(turns, keyOf) {
     b.turns++;
     if (!u) b.sem_contagem++;
     else for (const f of campos) b[f] += u[f] ?? 0;
-    b.cost += copilotCost(t) ?? 0;
+    b.cost += custo(t) ?? 0;
     if (semPreco(t)) b.sem_preco++;
     map.set(k, b);
   }
@@ -1223,6 +1292,85 @@ function groups(s) {
   return { root, subs };
 }
 
+/** A mediana de uma lista de números. `null` quando não há o que medir. */
+const mediana = xs => {
+  if (!xs.length) return null;
+  const o = [...xs].sort((a, b) => a - b), m = o.length >> 1;
+  return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+};
+
+/** Tokens de saída por segundo de stream, somando só os turnos que streamaram.
+ *  Somar tempo e tokens antes de dividir dá o ritmo da sessão; dividir turno a
+ *  turno e tirar a média deixaria uma resposta de três tokens pesar tanto
+ *  quanto uma de três mil. */
+function taxaGeracao(turns) {
+  let out = 0, ms = 0;
+  for (const t of turns) {
+    if (!t.timing?.stream_ms || !t.usage?.output) continue;
+    out += t.usage.output; ms += t.timing.stream_ms;
+  }
+  return ms ? out / (ms / 1000) : null;
+}
+
+/** O custo de cada ferramenta, em duas moedas que não se convertem uma na outra.
+ *
+ *  Em token, derivado dos turnos: quanto a saída dela ocupou no prompt da
+ *  primeira vez (`tokens`) e quanto reenviá-la custou em todos os turnos
+ *  seguintes (`resent`). Numa conversa longa o segundo é muito maior que o
+ *  primeiro — uma ferramenta que devolve demais não se paga uma vez, se paga em
+ *  cada turno até o fim.
+ *
+ *  Em tempo, das execuções que o `tools.jsonl` registra: não custa token nenhum
+ *  e é quase tudo que faz uma sessão parecer lenta.
+ *
+ *  A fronteira entre novo e reenviado é a mesma que o diff de reuso já traça —
+ *  `stable_messages` —, então quando o prefixo quebra o que estava atrás dele
+ *  volta a contar como novo. Não é erro de contagem: é o que a quebra faz. */
+function ferramentas(s) {
+  const porNome = new Map();
+  const linha = nome => {
+    let l = porNome.get(nome);
+    if (!l) porNome.set(nome, l = {
+      nome, calls: 0, tokens: 0, resent: 0, chars: 0, errors: 0,
+      runs: 0, failed: 0, ms: 0, msMax: 0, output: 0,
+    });
+    return l;
+  };
+
+  for (const t of s.turns) {
+    const stable = t.reuse?.stable_messages ?? 0;
+    (t.prompt?.messages ?? []).forEach((m, i) => {
+      const novo = i >= stable;
+      if (novo) for (const c of m.tool_calls ?? []) if (c.name) linha(c.name).calls++;
+      const rs = m.tool_results ?? [];
+      if (!rs.length) return;
+      // Os tokens da linha, na proporção que os resultados ocupam dela: uma
+      // mensagem que mistura texto e resultado não entrega o texto à ferramenta.
+      const chars = rs.reduce((a, r) => a + (r.chars ?? 0), 0);
+      const total = Math.round((m.tokens ?? 0) * (m.chars ? Math.min(1, chars / m.chars) : 1));
+      for (const r of rs) {
+        const l = linha(r.tool ?? '?');
+        const parte = chars ? Math.round(total * (r.chars ?? 0) / chars) : total;
+        if (!novo) { l.resent += parte; continue; }
+        l.tokens += parte; l.chars += r.chars ?? 0;
+        if (r.error) l.errors++;
+      }
+    });
+  }
+
+  for (const x of s.tools ?? []) {
+    const l = linha(x.tool ?? '?');
+    l.runs++;
+    if (x.ok === false) l.failed++;
+    l.ms += x.ms ?? 0;
+    l.msMax = Math.max(l.msMax, x.ms ?? 0);
+    l.output += x.output_chars ?? 0;
+  }
+
+  const lista = [...porNome.values()].sort((a, b) => (b.tokens + b.resent) - (a.tokens + a.resent));
+  return lista.length ? lista : null;
+}
+
 function sessionTotals(s) {
   const sum = s.summary ?? {};
   const add = k => s.turns.reduce((a, t) => a + (t.usage?.[k] ?? 0), 0);
@@ -1254,14 +1402,26 @@ function sessionTotals(s) {
     guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
     // E os que não têm contagem nenhuma: ficam fora dos tokens e do custo.
     sem_contagem: s.turns.filter(t => !t.usage?.total).length,
-    // Dinheiro só quando a sessão passou pelo Copilot: é o único provedor cuja
-    // tabela de preço esta tela conhece.
-    copilot_turns: s.turns.filter(isCopilot).length || null,
-    copilot_cost: s.turns.some(isCopilot)
-      ? s.turns.reduce((a, t) => a + (copilotCost(t) ?? 0), 0) : null,
+    // Dinheiro sempre que houver tarifa: a do catálogo, gravada no turno, ou a
+    // de créditos do Copilot para os logs que vieram de lá.
+    copilot_turns: s.turns.some(t => custo(t) != null) ? s.turns.filter(t => custo(t) != null).length : null,
+    copilot_cost: s.turns.some(t => custo(t) != null)
+      ? s.turns.reduce((a, t) => a + (custo(t) ?? 0), 0) : null,
+    fonte_custo: fonteCusto(s.turns),
     // Os modelos que ficaram fora da soma, para o total não passar por completo.
     copilot_sem_preco: [...new Set(s.turns.filter(semPreco).map(t => t.model))],
     copilot_sem_preco_turnos: s.turns.filter(semPreco).length,
+    // Turnos que repetiram um prompt já recusado: token pago duas vezes.
+    retries: s.turns.filter(t => t.retry_of != null).length || null,
+    retry_tokens: s.turns.filter(t => t.retry_of != null).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
+    // Compactações e o que elas jogaram fora.
+    compactacoes: s.turns.filter(t => t.compaction).length || null,
+    compact_dropped: s.turns.reduce((a, t) => a + (t.compaction?.dropped_tokens ?? 0), 0) || null,
+    // Latência: a mediana separa o provedor lento da resposta longa melhor que
+    // a média, que uma única chamada travada distorce inteira.
+    ttft_p50: mediana(s.turns.map(t => t.timing?.first_token_ms).filter(x => x != null)),
+    tps: taxaGeracao(s.turns),
+    ferramentas: ferramentas(s),
   };
   const elapsed = s.turns.some(t => t.elapsed_seconds != null)
     ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
@@ -1427,6 +1587,67 @@ function render() {
   requestAnimationFrame(syncExpanders);
 }
 
+/* ---------- ferramentas ---------- */
+const CORES_TOOL = ['--accent', '--orange', '--green', '--cyan', '--purple', '--yellow', '--red'];
+
+/** Onde o contexto está indo, por ferramenta.
+ *
+ *  A coluna que importa é a última: `total` é o que a ferramenta custou de
+ *  verdade, e ela é dominada por `reenviado`, não por `1ª vez`. Uma ferramenta
+ *  que devolve 8 mil tokens numa conversa de quarenta turnos não custou 8 mil —
+ *  custou 8 mil vezes o número de turnos que vieram depois dela. É esse número
+ *  que paga uma mudança de prompt, e é ele que some quando se olha só o turno
+ *  em que a ferramenta rodou. */
+function renderFerramentas(lista) {
+  const wrap = el('div');
+  if (!lista?.length) return wrap;
+  const total = lista.reduce((a, l) => a + l.tokens + l.resent, 0);
+  wrap.append(el('h3', null, 'Ferramentas'));
+
+  if (total) {
+    const bar = el('div', 'stack');
+    bar.innerHTML = lista.map((l, i) => {
+      const w = pctOf(l.tokens + l.resent, total);
+      const c = `var(${CORES_TOOL[i % CORES_TOOL.length]})`;
+      return `<i style="width:${w}%;background:${c}" title="${esc(l.nome)}: ${nf(l.tokens + l.resent)} tk (${w.toFixed(1)}%)">${
+        w > 9 ? esc(l.nome) + ' ' + w.toFixed(0) + '%' : ''}</i>`;
+    }).join('');
+    wrap.append(bar);
+  }
+
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>Ferramenta</th>
+      <th class="v">Chamadas</th><th class="v">1ª vez</th><th class="v">Reenviado</th><th class="v">Total tk</th>
+      <th class="v">Execuções</th><th class="v">Falhas</th><th class="v">Tempo</th><th class="v">Saída</th></tr></thead>`;
+  const tb = el('tbody');
+  for (const l of lista) {
+    const tr = el('tr');
+    tr.innerHTML = `<td class="k">${esc(l.nome)}</td>
+      <td class="v">${l.calls || '<span style="color:var(--faint)">—</span>'}</td>
+      <td class="v">${nfOpt(l.tokens || null)}</td>
+      <td class="v" style="color:var(--yellow)">${nfOpt(l.resent || null)}</td>
+      <td class="v"><b>${nf(l.tokens + l.resent)}</b></td>
+      <td class="v">${l.runs || '<span style="color:var(--faint)">—</span>'}</td>
+      <td class="v" style="color:${l.failed || l.errors ? 'var(--red)' : 'var(--faint)'}"${
+        l.errors ? ` title="${l.errors} resultado(s) marcados como erro pelo modelo"` : ''}>${
+        l.failed + l.errors || '—'}</td>
+      <td class="v"${l.msMax ? ` title="pior execução: ${nf(l.msMax)}ms"` : ''}>${
+        l.ms ? dur(l.ms / 1000) : '<span style="color:var(--faint)">—</span>'}</td>
+      <td class="v" style="color:var(--faint)">${l.output ? bytes(l.output) : '—'}</td>`;
+    tb.append(tr);
+  }
+  tbl.append(tb);
+  const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+  wrap.append(card);
+  wrap.append(el('div', 'foot',
+    '<b>1ª vez</b> é o que a saída da ferramenta ocupou no prompt do turno em que apareceu; '
+    + '<b>reenviado</b> é o que custou viajar em todos os turnos seguintes, que numa conversa longa é a maior parte. '
+    + 'Os tokens por linha vêm do rateio proporcional por caracteres: exatos somados, aproximados um a um. '
+    + '<b>Execuções</b> e <b>tempo</b> só existem quando o log tem <code>tools.jsonl</code>; '
+    + 'uma execução sem conclusão registrada conta como falha.'));
+  return wrap;
+}
+
 /* ---------- visão geral ---------- */
 function renderOverview() {
   const s = session(); const wrap = el('div');
@@ -1465,11 +1686,15 @@ function renderOverview() {
   const cacheRate = (tot.cr + tot.cw + tot.i) ? (tot.cr / (tot.cr + tot.cw + tot.i) * 100) : 0;
 
   // A fatura do Copilot é em créditos; o dólar é a leitura, o crédito é o que
-  // sai do pacote do plano — então o KPI mostra um e conta o outro no title.
+  // sai do pacote do plano — então lá o KPI mostra um e conta o outro no title.
+  // Com tarifa do catálogo o dólar já é o número, e não há crédito a converter.
+  const emCreditos = tot2.fonte_custo === 'créditos do Copilot';
   const custoKpi = tot2.copilot_cost != null
-    ? `<div class="kpi" title="${(tot2.copilot_cost / CREDIT_USD).toFixed(1).replace('.', ',')} créditos${
+    ? `<div class="kpi" title="${emCreditos
+          ? (tot2.copilot_cost / CREDIT_USD).toFixed(1).replace('.', ',') + ' créditos'
+          : 'tarifa do catálogo do opencode, gravada em cada turno'}${
         tot2.copilot_sem_preco.length ? ` · ${tot2.copilot_sem_preco_turnos} turno(s) fora da conta` : ''
-      }"><b style="color:var(--green)">${money(tot2.copilot_cost)}</b><span>Custo (GitHub Copilot)${
+      }"><b style="color:var(--green)">${money(tot2.copilot_cost)}</b><span>Custo (${esc(tot2.fonte_custo ?? '—')})${
         tot2.copilot_sem_preco.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
     : '';
 
@@ -1501,6 +1726,17 @@ function renderOverview() {
       ? K(nf(tot2.prefix_breaks), 'Quebras de prefixo', tot2.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
     (tot2.resent_tokens != null ? K(nf(tot2.resent_tokens), 'Tokens reenviados', 'var(--yellow)') : '') +
     (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '') +
+    // Retentativa é desperdício puro: nada de novo foi perguntado e o prompt
+    // inteiro foi pago outra vez.
+    (tot2.retries ? K(nf(tot2.retry_tokens), `Tokens em retentativa (${tot2.retries} turno(s))`, 'var(--red)') : '') +
+    (tot2.compactacoes
+      ? K(nf(tot2.compact_dropped), `Tokens descartados em compactação (${tot2.compactacoes}×)`, 'var(--yellow)') : '') +
+    // Latência do provedor, separada do tempo de geração: são problemas
+    // diferentes e só um deles se resolve mexendo no prompt.
+    (tot2.ttft_p50 != null
+      ? K(Math.round(tot2.ttft_p50) + 'ms', 'Tempo até o 1º token (mediana)',
+          tot2.ttft_p50 > 5000 ? 'var(--red)' : tot2.ttft_p50 > 2000 ? 'var(--yellow)' : 'var(--green)') : '') +
+    (tot2.tps != null ? K(tot2.tps.toFixed(0), 'Tokens de saída por segundo') : '') +
     // O que a conversa gastou nos subagentes que disparou: já está nos
     // totais acima, e aqui aparece separado.
     (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '')
@@ -1510,7 +1746,7 @@ function renderOverview() {
   if (tot2.copilot_sem_preco.length)
     wrap.append(el('div', 'foot', '* fora do custo: '
       + tot2.copilot_sem_preco.map(m => esc(m)).join(', ')
-      + ` — sem preço na tabela de créditos do Copilot (${tot2.copilot_sem_preco_turnos} turno(s)).`));
+      + ` — sem tarifa gravada no turno nem preço na tabela de créditos do Copilot (${tot2.copilot_sem_preco_turnos} turno(s)).`));
 
   // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
   const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
@@ -1544,19 +1780,38 @@ function renderOverview() {
       + '.'));
   }
 
+  wrap.append(renderFerramentas(tot2.ferramentas));
+
   // tabela por turno
   const tbl = el('table');
   tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th>
       <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
-      <th class="v">Total</th><th class="v">Prefixo</th><th class="v">Tempo</th><th class="v">Fim</th></tr></thead>`;
+      <th class="v">Total</th><th class="v">Prefixo</th><th class="v">1º token</th><th class="v">Tempo</th><th class="v">Fim</th></tr></thead>`;
   const tb = el('tbody');
+  // Os turnos agrupados pelo que o usuário pediu. Um pedido vira vários turnos
+  // — cada chamada de ferramenta é outra ida ao modelo — e é o pedido, não o
+  // turno, que a pessoa reconhece como "uma coisa que eu mandei fazer".
+  let pedido = null;
   for (const t of s.turns) {
+    if (t.request_index != null && t.request_index !== pedido && !isSub(t)) {
+      pedido = t.request_index;
+      const doPedido = s.turns.filter(x => x.request_index === pedido);
+      const tk = doPedido.reduce((a, x) => a + (x.usage?.total ?? 0), 0);
+      const sep = el('tr', 'pedido');
+      sep.innerHTML = `<td colspan="12"><b>pedido #${pedido}</b> · ${doPedido.length} turno(s) · ${nf(tk)} tk</td>`;
+      tb.append(sep);
+    }
     const u = t.usage ?? {};
     const st = t.response?.status; const ok = !falhou(t);
     const tr = el('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
-        ? ` <span class="chip purple" title="subagente ${esc(t.session ?? '?')}">sub</span>` : ''}</td>
+        ? ` <span class="chip purple" title="subagente ${esc(t.session ?? '?')}">sub</span>` : ''}${
+        t.retry_of != null
+          ? ` <span class="chip red solid" title="repete o turno #${t.retry_of} byte a byte — ${esc(t.retry_reason ?? 'a tentativa anterior falhou')}">retry</span>` : ''}${
+        t.compaction
+          ? ` <span class="chip yellow" title="primeiro turno depois de a história ser reescrita${
+              t.compaction.overflow ? ' — forçada por estouro de contexto' : ''}: ${nf(t.compaction.dropped_tokens ?? 0)} tk descartados">compactou</span>` : ''}</td>
       <td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
       <td>${esc(turnLabel(t))}</td>
       <td class="v">${nfOpt(u.input)}</td><td class="v" style="color:var(--cyan)">${nfOpt(u.cache_read)}</td>
@@ -1567,6 +1822,8 @@ function renderOverview() {
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
           ? '<span style="color:var(--green)">estável</span>'
           : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
+      <td class="v"${t.timing ? ` title="1º byte ${t.timing.first_byte_ms}ms · stream ${t.timing.stream_ms}ms · ${t.timing.chunks} frames"` : ''}>${
+        t.timing?.first_token_ms != null ? t.timing.first_token_ms + 'ms' : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v">${secs(t.elapsed_seconds)}</td>
       <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
         t.incomplete ? 'incompleto' : (st ?? (t.error ? 'falhou' : esc(t.response?.stop_reason ?? '—')))}</td>`;
