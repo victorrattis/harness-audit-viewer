@@ -293,6 +293,11 @@ const nf = n => (n ?? 0).toLocaleString('pt-BR');
 /** Um contador que o provider não reporta. Ausente não é zero: um diz que o
  *  modelo não tem esse cache, o outro que o cache estava lá e não pegou. */
 const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : nf(n);
+/** A conta do GitHub Copilot é feita em créditos, e um crédito é um centavo de
+ *  dólar. Os preços da tabela são créditos por 1M de tokens. */
+const CREDIT_USD = 0.01;
+const money = (n, d = 2) => n == null ? '\u2014'
+  : 'US$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
 /** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
  *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
@@ -304,6 +309,81 @@ const dur = n => {
   return h >= 24 ? Math.floor(h / 24) + 'd' + (h % 24) + 'h' : h + 'h' + String(Math.floor(n % 3600 / 60)).padStart(2, '0') + 'min';
 };
 const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
+
+/* =========================================================================
+   Preço do GitHub Copilot
+   =========================================================================
+ *  Créditos por 1M de tokens, no billing por uso (a partir de 1º/jun/2026).
+ *  Só vale para turnos do Copilot: nos outros provedores a tela não fala de
+ *  dinheiro, porque o preço aqui é o da revenda do Copilot e não o do provider.
+ *
+ *  `write: null` é a linha da tabela que traz "—": ali o cache write não é item
+ *  próprio, os tokens gravados entram como input e são cobrados como tal.
+ *  `limit` é o corte de contexto — acima dele a tarifa é a `high`, e quem decide
+ *  é o tamanho do prompt do turno, que é o que o provedor mede.
+ *
+ *  Modelo que não está aqui fica fora da conta, e a tela diz quais foram: um
+ *  total incompleto que se apresenta como completo é pior que total nenhum. */
+const COPILOT_PRICES = {
+  'claude-haiku-4.5':   { in: 100, cached: 10,   write: 125,  out: 500 },
+  'claude-sonnet-4.6':  { in: 300, cached: 30,   write: 375,  out: 1500 },
+  'claude-sonnet-5':    { in: 200, cached: 20,   write: 250,  out: 1000 },
+  'gemini-3.6-flash':   { in: 75,  cached: 7.5,  write: null, out: 375 },
+  'gemini-3.7-flash':   { in: 75,  cached: 7.5,  write: null, out: 375 },
+  'gpt-5-mini':         { in: 25,  cached: 2.5,  write: null, out: 200 },
+  'gpt-5.3-codex':      { in: 175, cached: 17.5, write: null, out: 1400 },
+  'gpt-5.4':            { limit: 272000,
+                          low:  { in: 250, cached: 25, write: null, out: 1500 },
+                          high: { in: 500, cached: 50, write: null, out: 2250 } },
+  'gpt-5.4-mini':       { in: 75,  cached: 7.5,  write: null, out: 450 },
+  'gpt-5.6-luna':       { limit: 200000,
+                          low:  { in: 20, cached: 2, write: 25, out: 120 },
+                          high: { in: 40, cached: 4, write: 50, out: 180 } },
+  'gpt-5.6-terra':      { limit: 272000,
+                          low:  { in: 200, cached: 20, write: 250, out: 1200 },
+                          high: { in: 400, cached: 40, write: 500, out: 1800 } },
+  'grok-4.6':           { limit: 200000,
+                          low:  { in: 200, cached: 50,  write: null, out: 600 },
+                          high: { in: 400, cached: 100, write: null, out: 1200 } },
+  'mai-code-1.1-flash': { in: 20,  cached: 2,    write: null, out: 120 },
+};
+
+/** O turno passou pelo Copilot. `provider` vem do id do provedor no harness
+ *  (`github-copilot`) ou, quando ele não se identifica, do host da requisição
+ *  (`api.githubcopilot.com`) — os dois trazem a palavra. */
+const isCopilot = t => String(t.provider ?? '').toLowerCase().includes('copilot');
+
+/** O id do modelo como a tabela o nomeia: sem o prefixo do provedor que alguns
+ *  harnesses colam na frente, e em minúsculas. */
+const copilotModel = m => String(m ?? '').toLowerCase().split('/').pop();
+
+/** A tarifa do modelo, já escolhida a faixa de contexto. `null` quando o modelo
+ *  não está na tabela — e aí o turno não entra na conta. */
+function copilotPrice(model, promptTokens) {
+  const row = COPILOT_PRICES[copilotModel(model)];
+  if (!row) return null;
+  return row.limit ? (promptTokens > row.limit ? row.high : row.low) : row;
+}
+
+/** Quanto o turno custou, em dólares. `null` quando não há o que cobrar: não é
+ *  Copilot, o provider não contou os tokens, ou o modelo não tem preço. */
+function copilotCost(t) {
+  if (!isCopilot(t)) return null;
+  const u = t.usage; if (!u) return null;
+  const prompt = (u.input ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0);
+  const p = copilotPrice(t.model, prompt); if (!p) return null;
+  // `reasoning` não entra somado: ele já está dentro de `output`, e somar de
+  // novo cobraria o raciocínio duas vezes.
+  const cr = (u.input ?? 0) * p.in
+           + (u.cache_read ?? 0) * p.cached
+           + (u.cache_write ?? 0) * (p.write ?? p.in)
+           + (u.output ?? 0) * p.out;
+  return cr / 1e6 * CREDIT_USD;
+}
+
+/** Turno do Copilot que ficou de fora da conta por falta de preço. Sem `usage`
+ *  não conta como sem preço: ali não havia tokens para cobrar. */
+const semPreco = t => isCopilot(t) && !!t.usage && copilotPrice(t.model, 0) == null;
 
 /* =========================================================================
    Carregamento (drag&drop / picker / http auto)
@@ -1089,18 +1169,24 @@ function buckets(turns, keyOf) {
   for (const t of turns) {
     const k = keyOf(t); if (k == null) continue;
     const u = t.usage;
-    const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0 }, ...campos.map(f => ({ [f]: 0 })));
+    const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0, cost: 0, sem_preco: 0 },
+                                          ...campos.map(f => ({ [f]: 0 })));
     // O turno conta na linha mesmo sem contagem — um turno recusado que some da
     // tabela vira uma soma que não fecha com o total da sessão. Só os tokens
     // ficam de fora, porque não houve tokens.
     b.turns++;
     if (!u) b.sem_contagem++;
     else for (const f of campos) b[f] += u[f] ?? 0;
+    b.cost += copilotCost(t) ?? 0;
+    if (semPreco(t)) b.sem_preco++;
     map.set(k, b);
   }
   for (const b of map.values()) {
     const prompt = b.input + b.cache_read + b.cache_write;
     b.cache_hit_rate = prompt ? b.cache_read / prompt : null;
+    // Zero e "não se cobra aqui" não são a mesma coisa: fora do Copilot a
+    // coluna mostra travessão, não US$ 0,00.
+    b.cost = b.cost || null;
   }
   return map.size ? Object.fromEntries(map) : null;
 }
@@ -1167,6 +1253,14 @@ function sessionTotals(s) {
     guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
     // E os que não têm contagem nenhuma: ficam fora dos tokens e do custo.
     sem_contagem: s.turns.filter(t => !t.usage?.total).length,
+    // Dinheiro só quando a sessão passou pelo Copilot: é o único provedor cuja
+    // tabela de preço esta tela conhece.
+    copilot_turns: s.turns.filter(isCopilot).length || null,
+    copilot_cost: s.turns.some(isCopilot)
+      ? s.turns.reduce((a, t) => a + (copilotCost(t) ?? 0), 0) : null,
+    // Os modelos que ficaram fora da soma, para o total não passar por completo.
+    copilot_sem_preco: [...new Set(s.turns.filter(semPreco).map(t => t.model))],
+    copilot_sem_preco_turnos: s.turns.filter(semPreco).length,
   };
   const elapsed = s.turns.some(t => t.elapsed_seconds != null)
     ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
@@ -1369,9 +1463,19 @@ function renderOverview() {
   // parecer perfeita — que é justamente o que se quer enxergar aqui.
   const cacheRate = (tot.cr + tot.cw + tot.i) ? (tot.cr / (tot.cr + tot.cw + tot.i) * 100) : 0;
 
+  // A fatura do Copilot é em créditos; o dólar é a leitura, o crédito é o que
+  // sai do pacote do plano — então o KPI mostra um e conta o outro no title.
+  const custoKpi = tot2.copilot_cost != null
+    ? `<div class="kpi" title="${(tot2.copilot_cost / CREDIT_USD).toFixed(1).replace('.', ',')} créditos${
+        tot2.copilot_sem_preco.length ? ` · ${tot2.copilot_sem_preco_turnos} turno(s) fora da conta` : ''
+      }"><b style="color:var(--green)">${money(tot2.copilot_cost)}</b><span>Custo (GitHub Copilot)${
+        tot2.copilot_sem_preco.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
+    : '';
+
   wrap.append(el('div', 'grid2',
     K(nf(tot2.turns), 'Turnos') +
     K(nf(tot2.total_tokens), 'Tokens totais') +
+    custoKpi +
     K((tot2.elapsed_approx ? '~' : '') + dur(tot2.elapsed_seconds),
        tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
     K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache',
@@ -1400,6 +1504,12 @@ function renderOverview() {
     // totais acima, e aqui aparece separado.
     (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '')
   ));
+
+  // O que o custo não cobre. Sem esta linha o total pareceria a fatura inteira.
+  if (tot2.copilot_sem_preco.length)
+    wrap.append(el('div', 'foot', '* fora do custo: '
+      + tot2.copilot_sem_preco.map(m => esc(m)).join(', ')
+      + ` — sem preço na tabela de créditos do Copilot (${tot2.copilot_sem_preco_turnos} turno(s)).`));
 
   // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
   const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
@@ -1480,8 +1590,12 @@ function renderOverview() {
   for (const [title, data, deco] of tabelas) {
     if (!data || !Object.keys(data).length) continue;
     const bt = el('table');
+    // A coluna de custo só existe onde há preço a aplicar: numa sessão que não
+    // é do Copilot a tabela fica exatamente como sempre foi.
+    const comCusto = !!tot2.copilot_turns;
     bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th>Turnos</th><th>Input</th>
-      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th></tr></thead>`;
+      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th>${
+        comCusto ? '<th>Custo</th>' : ''}</tr></thead>`;
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
       bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
@@ -1493,7 +1607,11 @@ function renderOverview() {
         <td class="num" style="color:var(--yellow)">${nf(v.cache_write)}</td>
         <td class="num" style="color:var(--purple)">${nf(v.output)}</td>
         <td class="num">${nf(v.total)}</td>
-        <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td></tr>`;
+        <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td>${
+          comCusto ? `<td class="num"${v.sem_preco
+            ? ` title="${v.sem_preco} turno(s) sem preço na tabela: entram aqui, mas não no custo"` : ''}>${
+            v.cost != null ? money(v.cost, 4) : '—'
+          }${v.sem_preco ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}</tr>`;
     bt.append(bb);
     const c2 = el('div', 'card tablecard'); c2.style.padding = '4px 8px'; c2.append(bt);
     wrap.append(el('h3', null, title), c2);
