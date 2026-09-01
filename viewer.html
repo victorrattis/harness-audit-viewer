@@ -290,6 +290,9 @@ const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const nf = n => (n ?? 0).toLocaleString('pt-BR');
+/** Um contador que o provider não reporta. Ausente não é zero: um diz que o
+ *  modelo não tem esse cache, o outro que o cache estava lá e não pegou. */
+const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : nf(n);
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
 /** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
  *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
@@ -500,25 +503,53 @@ function normalizeTurn(raw, fileName, mtime) {
   };
 }
 
+/** Troca cada `{"$ref":<hash>}` pela peça que o `pieces.jsonl` da sessão guarda.
+ *  O plugin escreve o prompt uma vez por sessão em vez de uma vez por turno; aqui
+ *  ele volta a ser o registro inteiro. Log antigo não tem ref nenhuma e passa
+ *  intacto; peça faltando vira um marcador visível, não uma tela quebrada. */
+function hydrate(value, store) {
+  if (Array.isArray(value)) return value.map(v => hydrate(v, store));
+  if (!value || typeof value !== 'object') return value;
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === '$ref')
+    return store?.get(value.$ref) ?? { _peça_ausente: value.$ref };
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = hydrate(v, store);
+  return out;
+}
+
 function ingest(files) {                       // files: [{path, text, mtime}]
   const map = new Map();
+  const stores = new Map();                    // sessão -> Map(hash, peça)
+  const crus = [];                             // turnos, hidratados na 2ª passada
   for (const f of files) {
-    if (!f.path.endsWith('.json')) continue;
-    let data; try { data = JSON.parse(f.text); } catch { continue; }
     const parts = f.path.split('/').filter(Boolean);
     const name = parts.pop();
-    if (name === 'latest.json') continue;
     const sid = parts.pop() || 'sessão';
+    if (name === 'pieces.jsonl') {
+      const store = stores.get(sid) ?? new Map();
+      for (const line of f.text.split('\n')) {
+        if (!line) continue;
+        try { const p = JSON.parse(line); store.set(p.h, p.b); } catch { /* linha truncada */ }
+      }
+      stores.set(sid, store);
+      continue;
+    }
+    if (!name.endsWith('.json') || name === 'latest.json') continue;
+    let data; try { data = JSON.parse(f.text); } catch { continue; }
     if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
     if (name === 'summary.json') map.get(sid).summary = data;
-    else if (data && (data.turn != null || data.request)) {
-      try {
-        const turn = normalizeTurn(data, name, f.mtime);
-        Object.defineProperty(turn, '_raw', { value: data, enumerable: false });
-        map.get(sid).turns.push(turn);
-      }
-      catch (e) { console.warn('turno ignorado:', f.path, e); }
+    else if (data && (data.turn != null || data.request)) crus.push({ sid, name, data, mtime: f.mtime, path: f.path });
+  }
+  // Só agora: o depósito pode ter chegado depois do turno que aponta para ele.
+  for (const t of crus) {
+    const data = hydrate(t.data, stores.get(t.sid));
+    try {
+      const turn = normalizeTurn(data, t.name, t.mtime);
+      Object.defineProperty(turn, '_raw', { value: data, enumerable: false });
+      map.get(t.sid).turns.push(turn);
     }
+    catch (e) { console.warn('turno ignorado:', t.path, e); }
   }
   // Uma pasta, uma sessão. O plugin escreve `<sessão>/turn_*.json` — a mesma
   // pasta toda vez que a sessão é retomada —, então a pasta que contém os
@@ -534,10 +565,14 @@ function ingest(files) {                       // files: [{path, text, mtime}]
   renderSessionSelect(); render();
 }
 
+/** O que vale a pena ler de uma pasta de log: os turnos e o depósito de peças
+ *  deles. `turns.jsonl` é índice, o mesmo que já está nos turnos. */
+const queremos = name => name.endsWith('.json') || name === 'pieces.jsonl';
+
 async function readEntry(entry, out, base) {
   if (entry.isFile) {
     const file = await new Promise(r => entry.file(r));
-    if (file.name.endsWith('.json')) out.push({ path: base + entry.name, text: await file.text(), mtime: file.lastModified });
+    if (queremos(file.name)) out.push({ path: base + entry.name, text: await file.text(), mtime: file.lastModified });
   } else if (entry.isDirectory) {
     const rd = entry.createReader(); let batch;
     do {
@@ -559,7 +594,7 @@ dz.addEventListener('drop', async e => {
 $('#pickBtn').onclick = $('#loadBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = async e => {
   const out = [];
-  for (const f of e.target.files) if (f.name.endsWith('.json')) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
+  for (const f of e.target.files) if (queremos(f.name)) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
   ingest(out);
 };
 
@@ -572,8 +607,9 @@ $('#fileInput').onchange = async e => {
   async function walk(dir, depth) {             // varre até 4 níveis (base/<run>/<sessão>/)
     if (depth > 4) return;
     const idx = await (await fetch('./' + enc(dir))).text();
-    for (const m of idx.matchAll(/href="([^"?/]+\.json)"/g)) {
+    for (const m of idx.matchAll(/href="([^"?/]+\.jsonl?)"/g)) {
       const fn = decodeURIComponent(m[1]);
+      if (!queremos(fn)) continue;
       const r = await fetch('./' + enc(dir + fn));
       const lm = r.headers.get('last-modified');
       out.push({ path: dir + fn, text: await r.text(), mtime: lm ? Date.parse(lm) : null });
@@ -1042,6 +1078,11 @@ function compLegend(comp) {
  *  tem status HTTP nenhum, então olhar só o status esconde a falha. */
 const falhou = t => !!t.error || (t.response?.status != null && t.response.status >= 400);
 
+/** Quanto o total do provider difere do que o plugin somou. Diferente de zero
+ *  quer dizer contador não lido — o número da linha está por baixo do que foi
+ *  cobrado, e o `*` na coluna Total é o aviso. */
+const mismatch = u => (u?.details?.total_mismatch ?? 0);
+
 function buckets(turns, keyOf) {
   const map = new Map();
   const campos = ['input', 'cache_read', 'cache_write', 'output', 'reasoning', 'total'];
@@ -1394,8 +1435,8 @@ function renderOverview() {
 
   // tabela por turno
   const tbl = el('table');
-  tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th><th>Msgs</th>
-      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Prefixo</th><th>Tempo</th><th>Fim</th></tr></thead>`;
+  tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th>
+      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Prefixo</th><th>Tempo</th><th>Fim</th></tr></thead>`;
   const tb = el('tbody');
   for (const t of s.turns) {
     const u = t.usage ?? {};
@@ -1405,10 +1446,12 @@ function renderOverview() {
     tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
         ? ` <span class="chip purple" title="subagente ${esc(t.session ?? '?')}">sub</span>` : ''}</td>
       <td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
-      <td>${esc(turnLabel(t))}</td><td class="v">${ctxStats(t).messages.length}</td>
-      <td class="v">${nf(u.input)}</td><td class="v" style="color:var(--cyan)">${nf(u.cache_read)}</td>
-      <td class="v" style="color:var(--yellow)">${nf(u.cache_write)}</td>
-      <td class="v" style="color:var(--purple)">${nf(u.output)}</td>
+      <td>${esc(turnLabel(t))}</td>
+      <td class="v">${nfOpt(u.input)}</td><td class="v" style="color:var(--cyan)">${nfOpt(u.cache_read)}</td>
+      <td class="v" style="color:var(--yellow)">${nfOpt(u.cache_write)}</td>
+      <td class="v" style="color:var(--purple)">${nfOpt(u.output)}</td>
+      <td class="v"${mismatch(u) ? ` title="o provider reportou ${nf(u.details.reported_total)} tokens neste turno, ${nf(Math.abs(mismatch(u)))} a ${mismatch(u) > 0 ? 'mais' : 'menos'}: há contador que o plugin não está lendo"` : ''}><b>${
+        nfOpt(u.total)}</b>${mismatch(u) ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
           ? '<span style="color:var(--green)">estável</span>'
           : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
@@ -1504,11 +1547,11 @@ function renderTurnHead(t) {
      <i style="width:${(u.input ?? 0)/tot*100}%;background:var(--accent)"></i>
      <i style="width:${(u.output ?? 0)/tot*100}%;background:var(--purple)"></i>`;
   h.append(bar, el('div', 'toklegend',
-    `<span><em style="background:var(--cyan)"></em>cache read <b>${nf(u.cache_read)}</b></span>
-     <span><em style="background:var(--yellow)"></em>cache write <b>${nf(u.cache_write)}</b></span>
+    `<span><em style="background:var(--cyan)"></em>cache read <b>${nfOpt(u.cache_read)}</b></span>
+     <span><em style="background:var(--yellow)"></em>cache write <b>${nfOpt(u.cache_write)}</b></span>
      <span><em style="background:var(--accent)"></em>input <b>${nf(u.input)}</b></span>
      <span><em style="background:var(--purple)"></em>output <b>${nf(u.output)}</b></span>
-     <span>reasoning <b>${nf(u.reasoning)}</b></span>
+     <span>reasoning <b>${nfOpt(u.reasoning)}</b></span>
      ${u.prompt != null ? `<span>prompt <b>${nf(u.prompt)}</b></span>` : ''}
      <span>total <b>${nf(u.total)}</b></span>`));
   if (t.incomplete)
