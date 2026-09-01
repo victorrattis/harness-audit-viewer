@@ -290,7 +290,6 @@ const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const nf = n => (n ?? 0).toLocaleString('pt-BR');
-const money = n => n == null ? '\u2014' : '$' + n.toFixed(4);
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
 /** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
  *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
@@ -302,33 +301,6 @@ const dur = n => {
   return h >= 24 ? Math.floor(h / 24) + 'd' + (h % 24) + 'h' : h + 'h' + String(Math.floor(n % 3600 / 60)).padStart(2, '0') + 'min';
 };
 const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
-
-/* =========================================================================
-   Preços (USD por 1M tokens). Cache read = 10% do input, cache write 5m = 125%.
-   Usado apenas quando o log não traz estimated_cost_usd por turno.
-   ========================================================================= */
-const PRICES = {
-  'claude-opus-5':      { in: 15,  out: 75 },
-  'claude-opus-4':      { in: 15,  out: 75 },
-  'claude-sonnet-5':    { in: 3,   out: 15 },
-  'claude-sonnet-4':    { in: 3,   out: 15 },
-  'claude-3-7-sonnet':  { in: 3,   out: 15 },
-  'claude-3-5-sonnet':  { in: 3,   out: 15 },
-  'claude-haiku-4-5':   { in: 1,   out: 5 },
-  'claude-3-5-haiku':   { in: 0.8, out: 4 },
-  'claude-3-haiku':     { in: 0.25,out: 1.25 },
-  'claude-fable-5':     { in: 0.8, out: 2.4 },
-};
-function priceOf(model) {
-  let best = null;
-  for (const k in PRICES) if (model && model.startsWith(k) && (!best || k.length > best.length)) best = k;
-  return best ? PRICES[best] : null;
-}
-function estimateCost(model, u) {
-  const p = priceOf(model); if (!p) return null;
-  return ((u.input || 0) * p.in + (u.output || 0) * p.out
-        + (u.cache_read || 0) * p.in * 0.1 + (u.cache_write || 0) * p.in * 1.25) / 1e6;
-}
 
 /* =========================================================================
    Carregamento (drag&drop / picker / http auto)
@@ -477,18 +449,14 @@ function normalizeTurn(raw, fileName, mtime) {
   const num = raw.turn ?? (m ? +m[1] : 0);
 
   if (raw.request && raw.request.body) {
-    // O plugin passou a decodificar o prompt, a resposta e o custo ele mesmo.
-    // Quando esses campos vêm no log, eles mandam: são os números do provider,
-    // não uma releitura do viewer.
-    const decoded = !!(raw.prompt || raw.usage?.source || raw.cost);
+    // O plugin passou a decodificar o prompt e a resposta ele mesmo. Quando
+    // esses campos vêm no log, eles mandam: são os números do provider, não
+    // uma releitura do viewer.
+    const decoded = !!(raw.prompt || raw.usage?.source);
     const t = { ...raw, turn: num, _format: decoded ? 'audit2' : 'stream' };
     const dialect = raw.prompt?.dialect;
     t._api = dialect && (NATIVE_API.has(dialect) || API_LABEL[dialect]) ? dialect : detectApi(t);
     t._native = NATIVE_API.has(t._api);
-    t.estimated_cost_usd = raw.cost?.estimated_usd ?? raw.estimated_cost_usd ?? null;
-    t.provider_cost_usd = raw.cost?.provider_usd ?? null;
-    t._estimated = !decoded && raw.estimated_cost_usd == null;
-    if (t._estimated) t.estimated_cost_usd = estimateCost(t.model, t.usage ?? {});
     return t;
   }
 
@@ -527,8 +495,6 @@ function normalizeTurn(raw, fileName, mtime) {
       cache_1h: u.cache_creation?.ephemeral_1h_input_tokens ?? null,
     },
     usage,
-    estimated_cost_usd: estimateCost(model, usage),
-    _estimated: true,
     _format: 'final',
     _api: 'anthropic',
   };
@@ -980,20 +946,6 @@ function cacheAudit(t) {
   // a divergência é numa mensagem antiga, tudo que vinha depois dela cai junto.
   const broken = (u.total && R && !R.prefix_stable) ? Math.max(0, offered - reusable) : 0;
 
-  // Uns e outros foram cobrados como escrita ou como input; de um jeito ou de
-  // outro, custaram mais do que a leitura que deveriam ter sido.
-  const per = t.cost?.per_million;
-  const p = priceOf(t.model);
-  const wIn = per?.input ?? (p ? p.in : null);
-  const wWrite = per?.cache_write ?? (p ? p.in * 1.25 : null);
-  const wRead = per?.cache_read ?? (p ? p.in * 0.1 : null);
-  const priced = n => {
-    if (!n || wIn == null || wWrite == null || wRead == null) return null;
-    const asWrite = Math.min(n, cw);
-    return (asWrite * (wWrite - wRead) + (n - asWrite) * (wIn - wRead)) / 1e6;
-  };
-  const lostUsd = priced(lost), brokenUsd = priced(broken);
-
   const denom = cr + cw + (u.input ?? 0);
   const hitRate = denom ? cr / denom : null;
 
@@ -1052,7 +1004,7 @@ function cacheAudit(t) {
   const audit = {
     verdict, reason, seq, marks, marksUsed: marks.length, marksLimit: 4, marksKnown,
     promptTokens, tailTokens, afterLastMark,
-    offered, ident, reusable, lost, lostUsd, broken, brokenUsd,
+    offered, ident, reusable, lost, broken,
     gapSeconds, ttlSeconds, hitRate,
   };
   Object.defineProperty(t, '_cache', { value: audit, enumerable: false });
@@ -1096,22 +1048,18 @@ function buckets(turns, keyOf) {
   for (const t of turns) {
     const k = keyOf(t); if (k == null) continue;
     const u = t.usage;
-    const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0, cost_usd: 0 }, ...campos.map(f => ({ [f]: 0 })));
+    const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0 }, ...campos.map(f => ({ [f]: 0 })));
     // O turno conta na linha mesmo sem contagem — um turno recusado que some da
     // tabela vira uma soma que não fecha com o total da sessão. Só os tokens
     // ficam de fora, porque não houve tokens.
     b.turns++;
     if (!u) b.sem_contagem++;
-    else {
-      for (const f of campos) b[f] += u[f] ?? 0;
-      b.cost_usd += t.estimated_cost_usd ?? 0;
-    }
+    else for (const f of campos) b[f] += u[f] ?? 0;
     map.set(k, b);
   }
   for (const b of map.values()) {
     const prompt = b.input + b.cache_read + b.cache_write;
     b.cache_hit_rate = prompt ? b.cache_read / prompt : null;
-    b.cost_usd = Math.round(b.cost_usd * 1e6) / 1e6;
   }
   return map.size ? Object.fromEntries(map) : null;
 }
@@ -1134,10 +1082,9 @@ function groups(s) {
   for (const t of s.turns) {
     if (!isSub(t)) continue;
     const id = t.session ?? '?';
-    const g = subs.get(id) ?? { id, parent: parentOf(t), agent: t.agent ?? null, turns: [], tokens: 0, cost: 0 };
+    const g = subs.get(id) ?? { id, parent: parentOf(t), agent: t.agent ?? null, turns: [], tokens: 0 };
     g.turns.push(t);
     g.tokens += t.usage?.total ?? 0;
-    g.cost += t.estimated_cost_usd ?? 0;
     g.agent = g.agent ?? t.agent ?? null;
     subs.set(id, g);
   }
@@ -1162,9 +1109,7 @@ function sessionTotals(s) {
     prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
     resent_tokens: comReuso.length ? comReuso.reduce((a, t) => a + (t.reuse.resent_tokens ?? 0), 0) : null,
     cache_lost: audits.reduce((a, x) => a + x.lost, 0),
-    cache_lost_usd: audits.reduce((a, x) => a + (x.lostUsd ?? 0), 0),
     cache_broken: audits.reduce((a, x) => a + x.broken, 0),
-    cache_broken_usd: audits.reduce((a, x) => a + (x.brokenUsd ?? 0), 0),
     cache_tail_avg: audits.length ? audits.reduce((a, x) => a + x.tailTokens, 0) / audits.length : 0,
     cache_ok: julgados.length ? julgados.filter(a => a.verdict === 'ok').length / julgados.length : null,
     cache_verdicts: audits.reduce((a, x) => (a[x.verdict] = (a[x.verdict] ?? 0) + 1, a), {}),
@@ -1176,9 +1121,7 @@ function sessionTotals(s) {
     by_session: buckets(s.turns, t => t.session ?? null),
     sub_turns: s.turns.filter(isSub).length || null,
     sub_tokens: s.turns.filter(isSub).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
-    sub_cost: s.turns.filter(isSub).reduce((a, t) => a + (t.estimated_cost_usd ?? 0), 0) || null,
     estimated_tokens: sum.estimated_tokens ?? null,
-    provider_cost: s.turns.reduce((a, t) => a + (t.provider_cost_usd ?? 0), 0) || null,
     // Turnos cujos tokens o provider não contou: o total é estimado neles.
     guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
     // E os que não têm contagem nenhuma: ficam fora dos tokens e do custo.
@@ -1187,18 +1130,14 @@ function sessionTotals(s) {
   const elapsed = s.turns.some(t => t.elapsed_seconds != null)
     ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
     : (sum.elapsed_seconds ?? null);
-  const costs = s.turns.map(t => t.estimated_cost_usd);
   return {
     turns: s.turns.length,
     errors: s.turns.filter(falhou).length,
     input: add('input'), output: add('output'),
     cache_read: add('cache_read'), cache_write: add('cache_write'), reasoning: add('reasoning'),
     total_tokens: add('total'),
-    estimated_cost_usd: costs.every(c => c == null) ? (sum.cost_usd ?? sum.estimated_cost_usd ?? null)
-                        : costs.reduce((a, c) => a + (c ?? 0), 0),
     elapsed_seconds: elapsed,
     elapsed_approx: !s.turns.some(t => t.elapsed_seconds != null) && elapsed != null,
-    estimated: s.turns.some(t => t._estimated),
     note: sum.note ?? null,
     ...nov,
   };
@@ -1224,8 +1163,7 @@ function renderSide() {
       <div class="stat"><b>${nf(totals.turns)}</b><span>Turnos</span></div>
       <div class="stat"><b style="color:${totals.errors ? 'var(--red)' : 'var(--green)'}">${nf(totals.errors)}</b><span>Erros</span></div>
       <div class="stat"><b>${nf(totals.total_tokens)}</b><span>Tokens</span></div>
-      <div class="stat"><b>${money(totals.estimated_cost_usd)}</b><span>Custo${totals.estimated ? " calc." : " est."}</span></div>
-      <div class="stat"><b>${totals.elapsed_approx ? '~' : ''}${secs(totals.elapsed_seconds)}</b><span>Duração</span></div>
+      <div class="stat"><b>${totals.elapsed_approx ? '~' : ''}${dur(totals.elapsed_seconds)}</b><span>Duração</span></div>
       <div class="stat"><b>${nf(totals.cache_read)}</b><span>Cache read</span></div>
     </div>`;
   side.append(head);
@@ -1276,7 +1214,6 @@ function renderSide() {
         <div class="r2">
           <span>${secs(t.elapsed_seconds)}</span>
           <span>${nf(t.usage?.total ?? 0)} tk</span>
-          <span>${money(t.estimated_cost_usd)}</span>
           ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
             if (A.verdict === 'ok') return '';         // o caso bom não precisa de marca
             return `<span style="color:${V.chip ? `var(--${V.chip})` : 'var(--faint)'}"
@@ -1296,13 +1233,12 @@ function renderSide() {
 function subHeader(g, block) {
   const closed = S.collapsed.has(g.id);
   const tokens = block.turns.reduce((a, t) => a + (t.usage?.total ?? 0), 0);
-  const cost = block.turns.reduce((a, t) => a + (t.estimated_cost_usd ?? 0), 0);
   const b = el('button', 'subhead' + (closed ? ' closed' : ''));
   b.innerHTML = `<span class="caret">▼</span>
     <span class="who">task${g.agent ? ': ' + esc(g.agent) : ''}${block.cont ? ' (cont.)' : ''}</span>
-    <span class="n">${block.turns.length} · ${nf(tokens)} tk · ${money(cost)}</span>`;
+    <span class="n">${block.turns.length} · ${nf(tokens)} tk</span>`;
   b.title = `subagente ${g.id} — disparado por ${g.parent}`
-    + ` · ${g.turns.length} turnos no total, ${nf(g.tokens)} tk, ${money(g.cost)}`;
+    + ` · ${g.turns.length} turnos no total, ${nf(g.tokens)} tk`;
   b.onclick = () => { closed ? S.collapsed.delete(g.id) : S.collapsed.add(g.id); render(); };
   return b;
 }
@@ -1394,9 +1330,8 @@ function renderOverview() {
 
   wrap.append(el('div', 'grid2',
     K(nf(tot2.turns), 'Turnos') +
-    K(money(tot2.estimated_cost_usd), tot2.estimated ? 'Custo calculado*' : 'Custo estimado', 'var(--green)') +
     K(nf(tot2.total_tokens), 'Tokens totais') +
-    K((tot2.elapsed_approx ? '~' : '') + secs(tot2.elapsed_seconds),
+    K((tot2.elapsed_approx ? '~' : '') + dur(tot2.elapsed_seconds),
        tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
     K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache',
       cacheRate > 90 ? 'var(--green)' : cacheRate > 50 ? 'var(--yellow)' : 'var(--red)') +
@@ -1406,12 +1341,10 @@ function renderOverview() {
     // O que estava em cache, continuava válido, e mesmo assim foi cobrado de
     // novo: o custo direto das falhas de cache.
     (tot2.cache_lost
-      ? K(nf(tot2.cache_lost) + (tot2.cache_lost_usd ? ` · ${money(tot2.cache_lost_usd)}` : ''),
-          'Cache perdido', 'var(--red)') : '') +
+      ? K(nf(tot2.cache_lost), 'Cache perdido', 'var(--red)') : '') +
     // O preço de reescrever o histórico: o que estava gravado e foi invalidado.
     (tot2.cache_broken
-      ? K(nf(tot2.cache_broken) + (tot2.cache_broken_usd ? ` · ${money(tot2.cache_broken_usd)}` : ''),
-          'Cache invalidado por mutação', 'var(--red)') : '') +
+      ? K(nf(tot2.cache_broken), 'Cache invalidado por mutação', 'var(--red)') : '') +
     (tot2.cache_tail_avg >= 1
       ? K(nf(Math.round(tot2.cache_tail_avg)), 'Cauda não cacheada / turno',
           tot2.cache_tail_avg > 1000 ? 'var(--red)' : 'var(--yellow)') : '') +
@@ -1424,8 +1357,7 @@ function renderOverview() {
     (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '') +
     // O que a conversa gastou nos subagentes que disparou: já está nos
     // totais acima, e aqui aparece separado.
-    (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '') +
-    (tot2.sub_cost ? K(money(tot2.sub_cost), 'Custo dos subagentes', 'var(--purple)') : '')
+    (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '')
   ));
 
   // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
@@ -1453,20 +1385,17 @@ function renderOverview() {
       + `${contados}/${s.turns.length} turnos contados pelo provider`
       + (tot2.guessed ? `; em ${tot2.guessed} ele não reportou nada e os tokens foram estimados por caracteres` : '')
       + (tot2.sem_contagem
-          ? `; ${tot2.sem_contagem} sem contagem nenhuma (recusado pelo provider ou sem resposta), fora dos tokens e do custo`
+          ? `; ${tot2.sem_contagem} sem contagem nenhuma (recusado pelo provider ou sem resposta), fora dos tokens`
           : '')
       + (!parcial ? ' — números exatos' : '')
       + (tot2.estimated_tokens ? ` · estimados à parte: ${nf(tot2.estimated_tokens.total)} tk` : '')
       + '.'));
   }
-  if (tot2.estimated) wrap.append(el('div', 'foot',
-    '* o log não traz custo por turno; calculado com a tabela de preços embutida no viewer '
-    + `(${esc(models.join(', '))}).`));
 
   // tabela por turno
   const tbl = el('table');
   tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th><th>Msgs</th>
-      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Prefixo</th><th>Tempo</th><th>Custo</th><th>Fim</th></tr></thead>`;
+      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Prefixo</th><th>Tempo</th><th>Fim</th></tr></thead>`;
   const tb = el('tbody');
   for (const t of s.turns) {
     const u = t.usage ?? {};
@@ -1483,7 +1412,7 @@ function renderOverview() {
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
           ? '<span style="color:var(--green)">estável</span>'
           : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
-      <td class="v">${secs(t.elapsed_seconds)}</td><td class="v">${money(t.estimated_cost_usd)}</td>
+      <td class="v">${secs(t.elapsed_seconds)}</td>
       <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
         t.incomplete ? 'incompleto' : (st ?? (t.error ? 'falhou' : esc(t.response?.stop_reason ?? '—')))}</td>`;
     tr.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
@@ -1509,20 +1438,19 @@ function renderOverview() {
     if (!data || !Object.keys(data).length) continue;
     const bt = el('table');
     bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th>Turnos</th><th>Input</th>
-      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th><th>Custo</th></tr></thead>`;
+      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th></tr></thead>`;
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
       bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
         <td class="num"${v.sem_contagem
-          ? ` title="${v.sem_contagem} turno(s) sem contagem: entram aqui, mas não têm tokens nem custo"` : ''}>${
+          ? ` title="${v.sem_contagem} turno(s) sem contagem: entram aqui, mas não têm tokens"` : ''}>${
           nf(v.turns)}${v.sem_contagem ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
         <td class="num">${nf(v.input)}</td>
         <td class="num" style="color:var(--cyan)">${nf(v.cache_read)}</td>
         <td class="num" style="color:var(--yellow)">${nf(v.cache_write)}</td>
         <td class="num" style="color:var(--purple)">${nf(v.output)}</td>
         <td class="num">${nf(v.total)}</td>
-        <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td>
-        <td class="num" style="color:var(--green)">${money(v.cost_usd)}</td></tr>`;
+        <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td></tr>`;
     bt.append(bb);
     const c2 = el('div', 'card tablecard'); c2.style.padding = '4px 8px'; c2.append(bt);
     wrap.append(el('h3', null, title), c2);
@@ -1552,8 +1480,6 @@ function renderTurnHead(t) {
       ${isSub(t) ? `<span class="chip purple solid" title="sessão própria na rede (${esc(t.session ?? '?')}), arquivada na pasta de quem a disparou">subagente de ${esc(shortId(parentOf(t)))}</span>` : ''}
       ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
       ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
-      ${chip('green', t.estimated_cost_usd != null ? money(t.estimated_cost_usd) + (t._estimated ? '*' : '') : null)}
-      ${chip('green', t.provider_cost_usd != null ? 'provider ' + money(t.provider_cost_usd) : null)}
       ${u.source === 'estimated' ? '<span class="chip yellow solid">tokens estimados</span>'
         : u.source === 'provider' ? '<span class="chip green">contagem do provider</span>' : ''}
       ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
@@ -1874,8 +1800,8 @@ function cachePanel(t) {
      ${R?.system_changed ? '<span class="chip red solid">system mudou</span>' : ''}
      ${R?.tools_changed ? '<span class="chip red solid">tools mudaram</span>' : ''}
      ${A.reusable > 0 ? `<span class="chip ${A.lost > 0 ? 'yellow' : 'green'}" title="maior prefixo que o turno anterior deixou gravado e que continua idêntico aqui">${nf(A.reusable)} tk reaproveitáveis</span>` : ''}
-     ${A.lost > 0 ? `<span class="chip red solid" title="estavam em cache, continuavam válidos, e mesmo assim foram cobrados de novo">perdidos ${nf(A.lost)} tk${A.lostUsd != null ? ' · ' + money(A.lostUsd) : ''}</span>` : ''}
-     ${A.broken > 0 ? `<span class="chip red solid" title="estavam gravados no turno anterior e foram invalidados pela reescrita do histórico">invalidados ${nf(A.broken)} tk${A.brokenUsd != null ? ' · ' + money(A.brokenUsd) : ''}</span>` : ''}
+     ${A.lost > 0 ? `<span class="chip red solid" title="estavam em cache, continuavam válidos, e mesmo assim foram cobrados de novo">perdidos ${nf(A.lost)} tk</span>` : ''}
+     ${A.broken > 0 ? `<span class="chip red solid" title="estavam gravados no turno anterior e foram invalidados pela reescrita do histórico">invalidados ${nf(A.broken)} tk</span>` : ''}
      ${A.tailTokens > 0 ? `<span class="chip ${A.verdict === 'cauda' ? 'yellow solid' : 'yellow'}" title="prompt depois do último marcador: pago a preço cheio em todo turno">cauda ${nf(A.tailTokens)} tk</span>` : ''}
      ${A.marksKnown ? `<span class="chip ${A.marksUsed > A.marksLimit ? 'red solid' : A.marksUsed ? '' : 'yellow'}">${A.marksUsed}/${A.marksLimit} breakpoints</span>` : '<span class="chip yellow">marcadores não registrados</span>'}
      ${u.cache_write ? `<span class="chip">TTL ${A.ttlSeconds === 3600 ? '1h' : '5min'}</span>` : ''}
@@ -2108,15 +2034,7 @@ function renderRequest(t) {
   // Contadores que só alguns provedores mandam, e o total como *eles* somam —
   // guardado para conferência, não somado ao nosso.
   add(kv(u.details, 'Usage · detalhes do provider'));
-  const cost = t.cost ?? null;
-  if (cost) {
-    add(kv({ estimated_usd: cost.estimated_usd, provider_usd: cost.provider_usd,
-             modelo_tarifado: cost.model, nota: cost.note }, 'Custo'));
-    add(kv(cost.per_million, 'Preço usado (USD por 1M tokens)'));
-  }
   add(kv(t.prompt?.settings, 'Parâmetros de amostragem (como foram no corpo)'));
-  if (t._estimated) wrap.append(el('div', 'foot',
-    '* custo não vem no log; calculado localmente a partir do modelo e do usage.'));
   return wrap;
 }
 
