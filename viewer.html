@@ -165,6 +165,7 @@ th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);ver
 th{color:var(--faint);font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px}
 td.k{font-family:var(--mono);color:var(--muted);white-space:nowrap;width:1%}
 td.v{font-family:var(--mono);white-space:nowrap;text-align:right}
+th.v,th.num{text-align:right}
 td.wrap{word-break:break-word;white-space:normal}
 
 /* ---------- stream ---------- */
@@ -1546,7 +1547,8 @@ function renderOverview() {
   // tabela por turno
   const tbl = el('table');
   tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th>
-      <th>Input</th><th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Prefixo</th><th>Tempo</th><th>Fim</th></tr></thead>`;
+      <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
+      <th class="v">Total</th><th class="v">Prefixo</th><th class="v">Tempo</th><th class="v">Fim</th></tr></thead>`;
   const tb = el('tbody');
   for (const t of s.turns) {
     const u = t.usage ?? {};
@@ -1593,9 +1595,10 @@ function renderOverview() {
     // A coluna de custo só existe onde há preço a aplicar: numa sessão que não
     // é do Copilot a tabela fica exatamente como sempre foi.
     const comCusto = !!tot2.copilot_turns;
-    bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th>Turnos</th><th>Input</th>
-      <th>C.read</th><th>C.write</th><th>Output</th><th>Total</th><th>Cache</th>${
-        comCusto ? '<th>Custo</th>' : ''}</tr></thead>`;
+    bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th class="num">Turnos</th>
+      <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th><th class="num">Output</th>
+      <th class="num">Total</th><th class="num">Cache</th>${
+        comCusto ? '<th class="num">Custo</th>' : ''}</tr></thead>`;
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
       bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
