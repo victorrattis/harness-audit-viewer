@@ -1384,63 +1384,126 @@ const shortId = id => (id ?? '').replace(/^ses_/, '').slice(0, 10);
 const isSub = t => (t.root_session && t.session ? t.root_session !== t.session : !!t.parent_session);
 const parentOf = t => t.parent_session ?? t.root_session ?? null;
 
-/** What opencode staples onto the message and the person never typed. */
-const REMINDER = /^\s*<(system-reminder|environment_details)\b/;
+/** Text a harness staples onto the message and the person never typed: the
+ *  reminders opencode appends, and the wrappers Claude Code puts around a slash
+ *  command — the caveat, the command name, its output. */
+const REMINDER = /^\s*<(system-reminder|environment_details|local-command-caveat|command-name|command-message|command-args|local-command-stdout|local-command-stderr)\b/;
+const COMANDO = /<command-name>\s*([^<\s][^<]*?)\s*<\/command-name>/;
 
-/** The text the person typed, when this is the turn carrying it.
- *
- *  On the wire that turn is the one whose last message is a `user` with text of
- *  its own: every other turn ends in `tool_result`, the model answering itself.
- *  The text can share the message with a tool result — that is what typing while
- *  a tool runs looks like —, so it is the presence of the text that decides, not
- *  what sits beside it. Read through `ctxStats`, never the raw body: it is what
- *  turns gemini, bedrock and openai into these same blocks. */
-function userPrompt(t) {
-  if (isSub(t)) return null;                   // a subagent's first message is written by the model
-  if (t.agent === 'title' || t.agent === 'summarize') return null;   // opencode's own side agents
-  const msgs = ctxStats(t).messages;
-  const last = msgs[msgs.length - 1];
-  if (!last || last.role !== 'user') return null;
-  const blocks = Array.isArray(last.content) ? last.content : [{ type: 'text', text: last.content }];
-  const b = blocks.find(x => x.type === 'text' && x.text?.trim() && !REMINDER.test(x.text));
-  return b ? b.text.trim() : null;
+/** The person's words inside one message: the first text block the harness did
+ *  not write itself. A message that is nothing but wrappers still says what the
+ *  person did — the slash command they ran — and that is the fallback. */
+function textoDoUsuario(m) {
+  const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
+  let comando = null;
+  for (const b of blocks) {
+    const txt = b?.type === 'text' && typeof b.text === 'string' ? b.text : '';
+    if (!txt.trim()) continue;
+    if (!REMINDER.test(txt)) return txt.trim();
+    comando = comando ?? (COMANDO.exec(txt)?.[1] ?? null);
+  }
+  return comando;
 }
+
+/** Where the conversation actually ends. Claude Code closes every request with a
+ *  `system` note of its own — the token budget left, a truncation warning —, so
+ *  the last entry in the array is not the last thing that was said. */
+function ultimaConversa(msgs) {
+  for (let i = msgs.length - 1; i >= 0; i--)
+    if (msgs[i]?.role === 'user' || msgs[i]?.role === 'assistant') return i;
+  return -1;
+}
+
+/** Index of the message carrying what the person typed, or -1.
+ *
+ *  On the wire that turn is the one whose last spoken message is a `user` with
+ *  text of its own: every other turn ends in `tool_result`, the model answering
+ *  itself. The text can share the message with a tool result — that is what
+ *  typing while a tool runs looks like —, so it is the presence of the text that
+ *  decides, not what sits beside it. Read through `ctxStats`, never the raw body:
+ *  it is what turns gemini, bedrock and openai into these same blocks. */
+function promptIndex(t) {
+  if (isSub(t)) return -1;                     // a subagent's first message is written by the model
+  if (t.agent === 'title' || t.agent === 'summarize') return -1;     // opencode's own side agents
+  const msgs = ctxStats(t).messages;
+  const i = ultimaConversa(msgs);
+  if (i < 0 || msgs[i].role !== 'user') return -1;
+  return textoDoUsuario(msgs[i]) ? i : -1;
+}
+
+/** The text the person typed, when this is the turn carrying it. */
+function userPrompt(t) {
+  const i = promptIndex(t);
+  return i < 0 ? null : textoDoUsuario(ctxStats(t).messages[i]);
+}
+
+/** The last thing the person said anywhere in this request — the label of last
+ *  resort for a request an id opened on a turn that carries no words. */
+function ultimoTexto(t) {
+  const msgs = ctxStats(t).messages;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.role !== 'user') continue;
+    const txt = textoDoUsuario(msgs[i]);
+    if (txt) return txt;
+  }
+  return null;
+}
+
+/** The id the log itself gives the request this turn belongs to, when it gives
+ *  one: `request_index` from the opencode plugin, counted off the `chat.message`
+ *  hook, and `claude_code.prompt_id` from the Claude Code harness. Both change
+ *  once per thing the person typed, and — unlike any reading of the messages —
+ *  stay put through the `user` messages a harness writes on its own ("Tool
+ *  loaded.", image notices, skill preambles), which is why they come first. */
+const pedidoId = t => t.request_index != null ? 'ri:' + t.request_index
+                    : t.claude_code?.prompt_id ? 'pid:' + t.claude_code.prompt_id : null;
 
 /** The things the person asked for: each prompt and the turns it set off.
  *
  *  A request is the unit someone recognizes — "that thing I asked for" — and it
  *  is not the turn: one prompt becomes as many turns as the tools the model
- *  decides to call, plus whatever a subagent runs in the middle. The plugin
- *  numbers it in `request_index`, counted off the `chat.message` hook; a log
- *  written before that gets the boundary derived here, from the only thing the
- *  wire shows: the turn that carries text the person wrote. */
+ *  decides to call, plus whatever a subagent runs in the middle. A log that
+ *  carries the id above is grouped by it; one written before it was recorded
+ *  falls back to the only thing the wire shows, turn by turn: the message that
+ *  carries text the person wrote. */
 function pedidos(s) {
   if (s._pedidos) return s._pedidos;
   const list = [], byTurn = new Map();
-  const numerado = s.turns.some(t => t.request_index != null && !isSub(t));
   let cur = null;
   for (const t of s.turns) {
     const txt = userPrompt(t);
-    const abre = numerado
-      ? !isSub(t) && t.request_index != null && t.request_index !== cur?.idx
+    const id = pedidoId(t);
+    const abre = id != null
+      ? !isSub(t) && id !== cur?.id
       // Derived: a retry repeats the request byte for byte, and the turn after a
       // compaction re-sends the same prompt over a rewritten history. Neither is
       // a new thing asked for.
       : !!txt && t.retry_of == null && txt !== cur?.text;
-    if (abre) {
-      cur = { n: list.length + 1, idx: t.request_index ?? null, text: txt, first: t.turn, turns: [] };
-      list.push(cur);
-    }
-    // A numbered request can open on a turn that carries no words of its own —
-    // the title agent runs on the prompt the person just sent — so the text is
-    // taken from the first turn in the request that does have it.
+    if (abre) { cur = { n: 0, id, text: txt, first: t.turn, turns: [] }; list.push(cur); }
+    // A request can open on a turn that carries no words of its own — the title
+    // agent runs on the prompt the person just sent — so the text is taken from
+    // the first turn in the request that does have it.
     if (cur && !cur.text && txt) cur.text = txt;
     if (cur) { cur.turns.push(t); byTurn.set(t.turn, cur); }
   }
-  // A numbered log whose opening turn holds no readable text: the boundary is
-  // known, the words are not, and saying so beats an empty band.
-  for (const p of list) p.text = p.text || '(prompt not recorded)';
-  const out = { list, byTurn };
+  for (const p of list) p.text = p.text || ultimoTexto(p.turns[0]) || '';
+  // A band with no words, or with the same words as the one before it, is not a
+  // new request: it is an id that changed mid-request, because the harness only
+  // started recording it there. Fold it back into the request it belongs to.
+  const final = [];
+  for (const p of list) {
+    const prev = final[final.length - 1];
+    if (prev && (!p.text || p.text === prev.text)) {
+      prev.turns.push(...p.turns);
+      for (const t of p.turns) byTurn.set(t.turn, prev);
+      continue;
+    }
+    p.n = final.length + 1;
+    final.push(p);
+  }
+  // The boundary is known, the words are not: saying so beats an empty band.
+  for (const p of final) p.text = p.text || '(prompt not recorded)';
+  const out = { list: final, byTurn };
   Object.defineProperty(s, '_pedidos', { value: out, enumerable: false });
   return out;
 }
@@ -2241,10 +2304,11 @@ function renderConversation(t) {
     d.append(body); wrap.append(d);
   }
 
-  // The text the person typed sits at the end of the request, on the turn that
-  // carries it. Marking it apart from the tool results is what says the model is
-  // answering a person here, and not itself.
-  const promptAt = userPrompt(t) ? c.messages.length - 1 : -1;
+  // The message the person typed, on the turn that opens the request — read from
+  // `pedidos`, the same source the sidebar tag and the overview band read, so the
+  // three can never disagree. Marking it apart from the tool results is what says
+  // the model is answering a person here, and not itself.
+  const promptAt = pedidos(session()).byTurn.get(t.turn)?.first === t.turn ? promptIndex(t) : -1;
   c.messages.forEach((m, i) =>
     wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens, i === promptAt)));
 
