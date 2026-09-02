@@ -1320,6 +1320,12 @@ const shortId = id => (id ?? '').replace(/^ses_/, '').slice(0, 10);
 const isSub = t => (t.root_session && t.session ? t.root_session !== t.session : !!t.parent_session);
 const parentOf = t => t.parent_session ?? t.root_session ?? null;
 
+/** The reasoning variant this turn ran at — "high", "max", "none", or "default"
+ *  when none was asked for. `null` only in a log written before the plugin
+ *  recorded it: absent is not "default", it is "not known", and showing the
+ *  first as the second would report every old turn as running at base effort. */
+const variantOf = t => t.variant ?? null;
+
 /** How the folder's turns split between the conversation and the subagents it
  *  spawned. A subagent is a session of its own on the wire — its own id and its
  *  own turns — but the work belongs to whoever called it: the plugin files it all
@@ -1452,7 +1458,11 @@ function sessionTotals(s) {
     cache_julgados: julgados.length,
     cache_verdicts: audits.reduce((a, x) => (a[x.verdict] = (a[x.verdict] ?? 0) + 1, a), {}),
     incomplete: s.turns.filter(t => t.incomplete).length || null,
-    by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
+    // The variant is part of the key, not a detail of the row: the same model at
+    // two reasoning efforts spends differently and answers differently, and
+    // summing them into one line hides the comparison the table exists to make.
+    by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`
+      + (variantOf(t) ? ` · ${variantOf(t)}` : '')),
     by_agent: buckets(s.turns, t => t.agent ?? null),
     // One row per conversation filed here: the root and every subagent it
     // spawned. It is what answers how much the `task` tool cost.
@@ -1907,7 +1917,9 @@ function renderOverview() {
         t.compaction
           ? ` <span class="chip yellow" title="first turn after the history was rewritten${
               t.compaction.overflow ? ' — forced by context overflow' : ''}: ${nf(t.compaction.dropped_tokens ?? 0)} tk dropped">compacted</span>` : ''}</td>
-      <td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
+      <td style="white-space:nowrap">${esc(t.model)}${variantOf(t)
+        ? ` <span style="color:var(--faint)">· ${esc(variantOf(t))}</span>` : ''}${
+        t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
       <td>${esc(turnLabel(t))}</td>
       <td class="v">${nfOpt(u.input)}</td><td class="v" style="color:var(--cyan)">${nfOpt(u.cache_read)}</td>
       <td class="v" style="color:var(--yellow)">${nfOpt(u.cache_write)}</td>
@@ -1992,6 +2004,7 @@ function renderTurnHead(t) {
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
       <span class="chip cyan">${esc(apiLabel(t._api))}</span>
+      ${variantOf(t) ? `<span class="chip" title="reasoning variant asked for on this turn">variant: ${esc(variantOf(t))}</span>` : ''}
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
       ${isSub(t) ? `<span class="chip purple solid" title="a session of its own on the wire (${esc(t.session ?? '?')}), filed in the folder of whoever spawned it">subagent of ${esc(shortId(parentOf(t)))}</span>` : ''}
       ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
@@ -2529,7 +2542,7 @@ function renderRequest(t) {
     elapsed_seconds: t.elapsed_seconds, stop_reason: res.stop_reason,
     service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Request / response'));
   const cx = ctxStats(t);
-  add(kv({ api: apiLabel(t._api), agent: t.agent,
+  add(kv({ api: apiLabel(t._api), agent: t.agent, variant: variantOf(t),
     model: b.model, max_tokens: b.max_tokens ?? b.max_output_tokens, stream: b.stream,
     thinking: b.thinking ? `${b.thinking.type} (budget ${b.thinking.budget_tokens})` : null,
     reasoning: b.reasoning ? `effort ${b.reasoning.effort ?? '—'} · summary ${b.reasoning.summary ?? '—'}` : null,
