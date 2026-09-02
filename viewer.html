@@ -68,7 +68,11 @@ header .grow{flex:1}
 .turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
 /* Subagent turns: indented under the header of the task that spawned them. */
 .turnitem.sub{margin-left:10px;width:calc(100% - 10px);box-shadow:inset 2px 0 var(--purple)}
-.turnitem.first{box-shadow:inset 2px 0 var(--cyan)}
+/* The turn that carries what the user typed: the one place the conversation
+   restarts from a person, and not from the model answering itself. */
+.turnitem.prompt{box-shadow:inset 2px 0 var(--cyan)}
+.turnitem .tag{flex:none;font-family:var(--mono);font-size:9.5px;line-height:14px;color:var(--cyan);
+  padding:0 4px;border-radius:4px;border:1px solid color-mix(in srgb,var(--cyan) 40%,transparent)}
 .subhead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:7px 0 3px;
   border-radius:8px;background:var(--panel2);border:1px solid var(--border)}
 .subhead:hover{background:var(--panel3)}
@@ -76,14 +80,6 @@ header .grow{flex:1}
 .subhead.closed .caret{transform:rotate(-90deg)}
 .subhead .who{flex:1;font-size:11.5px;color:var(--purple);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .subhead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
-/* The band that opens one thing the person asked for, in the turn list. */
-.prompthead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:10px 0 3px;
-  border-radius:8px;background:var(--panel2);border:1px solid var(--border);box-shadow:inset 2px 0 var(--cyan)}
-.prompthead:hover{background:var(--panel3)}
-.prompthead .caret{color:var(--faint);font-size:10px;flex:none;transition:transform .12s}
-.prompthead.closed .caret{transform:rotate(-90deg)}
-.prompthead .who{flex:1;font-size:11.5px;color:var(--cyan);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prompthead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
 .scopebar{padding:8px 6px 0}
 .scopebar select{width:100%;font-size:11.5px;padding:5px 7px}
 .scopebar select:hover{border-color:var(--accent)}
@@ -1716,28 +1712,26 @@ function renderSide() {
   // A subagent only shows up grouped in the full view; once picked in the scope,
   // the list is already its own and the header would have nothing to separate.
   const peds = pedidos(s);
-  const dobrado = t => { const p = peds.byTurn.get(t.turn); return !!p && S.collapsed.has('req:' + p.n); };
   for (const block of blocks) {
-    // A subagent stretch that ran inside a folded prompt goes with it: its header
-    // would otherwise stand there pointing at nothing.
-    if (block.sub && block.turns.every(dobrado)) continue;
     const agrupado = S.scope === 'all' && block.sub;
     if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
     if (agrupado && S.collapsed.has(block.sub)) continue;
     for (const t of block.turns) {
       const p = peds.byTurn.get(t.turn);
-      // The band comes before the turn that opens the prompt — and stays on
-      // screen when the prompt is folded, which is the whole point of folding it.
-      if (p && !block.sub && p.first === t.turn) list.append(promptHeader(p));
-      if (dobrado(t)) continue;
+      // The turn that opens a request is the one carrying what the user typed.
+      // The label keeps describing the reply, as it does on every other line —
+      // the tag says where the person spoke, and the title carries their words.
+      const doUser = !!p && !block.sub && p.first === t.turn;
       const ok = !falhou(t);
       const b = el('button', 'turnitem' + (block.sub ? ' sub' : '')
-        + (p && p.first === t.turn && !block.sub ? ' first' : '') + (S.sel === t.turn ? ' active' : ''));
+        + (doUser ? ' prompt' : '') + (S.sel === t.turn ? ' active' : ''));
+      if (doUser) b.title = `user prompt #${p.n} — ${p.turns.length} turn(s)\n\n${p.text}`;
       b.innerHTML = `
         <div class="r1">
           <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
             t.incomplete ? 'style="background:var(--yellow)"' : ''}></span>
           <span class="num">#${String(t.turn).padStart(2, '0')}</span>
+          ${doUser ? '<span class="tag">❯ user</span>' : ''}
           <span class="ttl">${esc(turnLabel(t))}</span>
         </div>
         <div class="r2">
@@ -1754,23 +1748,6 @@ function renderSide() {
   }
   if (!shown.length) list.append(el('div', 'empty', 'No turn matches the search.'));
   side.append(list);
-}
-
-/** Band that opens one thing the person asked for: the prompt they typed, and
- *  the turns it set off. Folded, the session reads as the list of prompts. */
-function promptHeader(p) {
-  const closed = S.collapsed.has('req:' + p.n);
-  const tokens = p.turns.reduce((a, t) => a + (t.usage?.total ?? 0), 0);
-  const b = el('button', 'prompthead' + (closed ? ' closed' : ''));
-  b.innerHTML = `<span class="caret">▼</span>
-    <span class="who">❯ ${esc(plain(p.text))}</span>
-    <span class="n">${p.turns.length} · ${nf(tokens)} tk</span>`;
-  b.title = `your prompt #${p.n} — ${p.turns.length} turn(s)\n\n${p.text}`;
-  b.onclick = () => {
-    closed ? S.collapsed.delete('req:' + p.n) : S.collapsed.add('req:' + p.n);
-    render();
-  };
-  return b;
 }
 
 /** Header of a subagent stretch: folds its turns away. The numbers are the
@@ -2305,7 +2282,7 @@ function messageCard(m, i, isNew, tokens, isPrompt) {
   d.innerHTML = `<summary><span class="caret">▶</span>
     <span class="who" style="color:${color}">${esc(role.toUpperCase())}</span>
     <span class="grow" style="color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(preview(blocks))}</span>
-    ${isPrompt ? '<span class="chip cyan solid" title="the text you typed: this is the turn that carries it">❯ your prompt</span>' : ''}
+    ${isPrompt ? '<span class="chip cyan solid" title="the text the user typed: this is the turn that carries it">❯ user prompt</span>' : ''}
     ${isNew ? '<span class="chip green solid">new this turn</span>' : ''}
     ${tokens != null ? `<span class="chip accent">${nf(tokens)} tk</span>` : ''}
     <span class="chip">#${i}</span>
