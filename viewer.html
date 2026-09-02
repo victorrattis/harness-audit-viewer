@@ -68,6 +68,7 @@ header .grow{flex:1}
 .turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
 /* Subagent turns: indented under the header of the task that spawned them. */
 .turnitem.sub{margin-left:10px;width:calc(100% - 10px);box-shadow:inset 2px 0 var(--purple)}
+.turnitem.first{box-shadow:inset 2px 0 var(--cyan)}
 .subhead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:7px 0 3px;
   border-radius:8px;background:var(--panel2);border:1px solid var(--border)}
 .subhead:hover{background:var(--panel3)}
@@ -75,6 +76,14 @@ header .grow{flex:1}
 .subhead.closed .caret{transform:rotate(-90deg)}
 .subhead .who{flex:1;font-size:11.5px;color:var(--purple);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .subhead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
+/* The band that opens one thing the person asked for, in the turn list. */
+.prompthead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:10px 0 3px;
+  border-radius:8px;background:var(--panel2);border:1px solid var(--border);box-shadow:inset 2px 0 var(--cyan)}
+.prompthead:hover{background:var(--panel3)}
+.prompthead .caret{color:var(--faint);font-size:10px;flex:none;transition:transform .12s}
+.prompthead.closed .caret{transform:rotate(-90deg)}
+.prompthead .who{flex:1;font-size:11.5px;color:var(--cyan);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prompthead .n{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
 .scopebar{padding:8px 6px 0}
 .scopebar select{width:100%;font-size:11.5px;padding:5px 7px}
 .scopebar select:hover{border-color:var(--accent)}
@@ -121,6 +130,7 @@ header .grow{flex:1}
 .msg.assistant{border-left:3px solid var(--purple)}
 .msg.system{border-left:3px solid var(--faint)}
 .msg.new{box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent)}
+.msg.prompt{box-shadow:0 0 0 1px color-mix(in srgb,var(--cyan) 55%,transparent)}
 
 .block{margin-top:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--panel2)}
 .block:first-child{margin-top:0}
@@ -213,6 +223,7 @@ tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
 tr.pedido td{background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:11px;
   padding-top:9px;padding-bottom:5px;border-top:1px solid var(--border)}
 tr.pedido b{color:var(--text)}
+tr.pedido .ask{color:var(--cyan)}
 .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
 .legend b{color:var(--text);font-weight:600}
 .legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
@@ -1377,6 +1388,67 @@ const shortId = id => (id ?? '').replace(/^ses_/, '').slice(0, 10);
 const isSub = t => (t.root_session && t.session ? t.root_session !== t.session : !!t.parent_session);
 const parentOf = t => t.parent_session ?? t.root_session ?? null;
 
+/** What opencode staples onto the message and the person never typed. */
+const REMINDER = /^\s*<(system-reminder|environment_details)\b/;
+
+/** The text the person typed, when this is the turn carrying it.
+ *
+ *  On the wire that turn is the one whose last message is a `user` with text of
+ *  its own: every other turn ends in `tool_result`, the model answering itself.
+ *  The text can share the message with a tool result — that is what typing while
+ *  a tool runs looks like —, so it is the presence of the text that decides, not
+ *  what sits beside it. Read through `ctxStats`, never the raw body: it is what
+ *  turns gemini, bedrock and openai into these same blocks. */
+function userPrompt(t) {
+  if (isSub(t)) return null;                   // a subagent's first message is written by the model
+  if (t.agent === 'title' || t.agent === 'summarize') return null;   // opencode's own side agents
+  const msgs = ctxStats(t).messages;
+  const last = msgs[msgs.length - 1];
+  if (!last || last.role !== 'user') return null;
+  const blocks = Array.isArray(last.content) ? last.content : [{ type: 'text', text: last.content }];
+  const b = blocks.find(x => x.type === 'text' && x.text?.trim() && !REMINDER.test(x.text));
+  return b ? b.text.trim() : null;
+}
+
+/** The things the person asked for: each prompt and the turns it set off.
+ *
+ *  A request is the unit someone recognizes — "that thing I asked for" — and it
+ *  is not the turn: one prompt becomes as many turns as the tools the model
+ *  decides to call, plus whatever a subagent runs in the middle. The plugin
+ *  numbers it in `request_index`, counted off the `chat.message` hook; a log
+ *  written before that gets the boundary derived here, from the only thing the
+ *  wire shows: the turn that carries text the person wrote. */
+function pedidos(s) {
+  if (s._pedidos) return s._pedidos;
+  const list = [], byTurn = new Map();
+  const numerado = s.turns.some(t => t.request_index != null && !isSub(t));
+  let cur = null;
+  for (const t of s.turns) {
+    const txt = userPrompt(t);
+    const abre = numerado
+      ? !isSub(t) && t.request_index != null && t.request_index !== cur?.idx
+      // Derived: a retry repeats the request byte for byte, and the turn after a
+      // compaction re-sends the same prompt over a rewritten history. Neither is
+      // a new thing asked for.
+      : !!txt && t.retry_of == null && txt !== cur?.text;
+    if (abre) {
+      cur = { n: list.length + 1, idx: t.request_index ?? null, text: txt, first: t.turn, turns: [] };
+      list.push(cur);
+    }
+    // A numbered request can open on a turn that carries no words of its own —
+    // the title agent runs on the prompt the person just sent — so the text is
+    // taken from the first turn in the request that does have it.
+    if (cur && !cur.text && txt) cur.text = txt;
+    if (cur) { cur.turns.push(t); byTurn.set(t.turn, cur); }
+  }
+  // A numbered log whose opening turn holds no readable text: the boundary is
+  // known, the words are not, and saying so beats an empty band.
+  for (const p of list) p.text = p.text || '(prompt not recorded)';
+  const out = { list, byTurn };
+  Object.defineProperty(s, '_pedidos', { value: out, enumerable: false });
+  return out;
+}
+
 /** The reasoning variant this turn ran at — "high", "max", "none", or "default"
  *  when none was asked for. `null` only in a log written before the plugin
  *  recorded it: absent is not "default", it is "not known", and showing the
@@ -1643,13 +1715,24 @@ function renderSide() {
 
   // A subagent only shows up grouped in the full view; once picked in the scope,
   // the list is already its own and the header would have nothing to separate.
+  const peds = pedidos(s);
+  const dobrado = t => { const p = peds.byTurn.get(t.turn); return !!p && S.collapsed.has('req:' + p.n); };
   for (const block of blocks) {
+    // A subagent stretch that ran inside a folded prompt goes with it: its header
+    // would otherwise stand there pointing at nothing.
+    if (block.sub && block.turns.every(dobrado)) continue;
     const agrupado = S.scope === 'all' && block.sub;
     if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
     if (agrupado && S.collapsed.has(block.sub)) continue;
     for (const t of block.turns) {
+      const p = peds.byTurn.get(t.turn);
+      // The band comes before the turn that opens the prompt — and stays on
+      // screen when the prompt is folded, which is the whole point of folding it.
+      if (p && !block.sub && p.first === t.turn) list.append(promptHeader(p));
+      if (dobrado(t)) continue;
       const ok = !falhou(t);
-      const b = el('button', 'turnitem' + (block.sub ? ' sub' : '') + (S.sel === t.turn ? ' active' : ''));
+      const b = el('button', 'turnitem' + (block.sub ? ' sub' : '')
+        + (p && p.first === t.turn && !block.sub ? ' first' : '') + (S.sel === t.turn ? ' active' : ''));
       b.innerHTML = `
         <div class="r1">
           <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
@@ -1671,6 +1754,23 @@ function renderSide() {
   }
   if (!shown.length) list.append(el('div', 'empty', 'No turn matches the search.'));
   side.append(list);
+}
+
+/** Band that opens one thing the person asked for: the prompt they typed, and
+ *  the turns it set off. Folded, the session reads as the list of prompts. */
+function promptHeader(p) {
+  const closed = S.collapsed.has('req:' + p.n);
+  const tokens = p.turns.reduce((a, t) => a + (t.usage?.total ?? 0), 0);
+  const b = el('button', 'prompthead' + (closed ? ' closed' : ''));
+  b.innerHTML = `<span class="caret">▼</span>
+    <span class="who">❯ ${esc(plain(p.text))}</span>
+    <span class="n">${p.turns.length} · ${nf(tokens)} tk</span>`;
+  b.title = `your prompt #${p.n} — ${p.turns.length} turn(s)\n\n${p.text}`;
+  b.onclick = () => {
+    closed ? S.collapsed.delete('req:' + p.n) : S.collapsed.add('req:' + p.n);
+    render();
+  };
+  return b;
 }
 
 /** Header of a subagent stretch: folds its turns away. The numbers are the
@@ -1946,11 +2046,13 @@ function renderOverview() {
   // The turns grouped by what the user asked for. One request becomes several
   // turns — every tool call is another trip to the model — and it is the request,
   // not the turn, that a person recognizes as "one thing I asked for".
+  const peds = pedidos(s);
   let pedido = null;
   for (const t of s.turns) {
-    if (t.request_index != null && t.request_index !== pedido && !isSub(t)) {
-      pedido = t.request_index;
-      const doPedido = s.turns.filter(x => x.request_index === pedido);
+    const p = peds.byTurn.get(t.turn);
+    if (p && p !== pedido) {
+      pedido = p;
+      const doPedido = p.turns;
       const tk = doPedido.reduce((a, x) => a + (x.usage?.total ?? 0), 0);
       // What that request cost. It is the unit a person recognizes — "that thing I
       // asked for came to this much" — and it is not the session total divided by
@@ -1958,7 +2060,8 @@ function renderOverview() {
       const cst = doPedido.reduce((a, x) => a + (custo(x) ?? 0), 0) || null;
       const fora = doPedido.filter(semPreco).length;
       const sep = el('tr', 'pedido');
-      sep.innerHTML = `<td colspan="12"><b>request #${pedido}</b> · ${doPedido.length} turn(s) · ${nf(tk)} tk${
+      sep.innerHTML = `<td colspan="12" title="${esc(p.text)}"><b class="ask">❯ ${
+        esc(plain(p.text).slice(0, 120))}</b> · <b>request #${p.n}</b> · ${doPedido.length} turn(s) · ${nf(tk)} tk${
         cst != null ? ` · <b${fora ? ` title="${fora} turn(s) with no rate: they count in the tokens, not in the cost"` : ''
           }>${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
       tb.append(sep);
@@ -2161,8 +2264,12 @@ function renderConversation(t) {
     d.append(body); wrap.append(d);
   }
 
+  // The text the person typed sits at the end of the request, on the turn that
+  // carries it. Marking it apart from the tool results is what says the model is
+  // answering a person here, and not itself.
+  const promptAt = userPrompt(t) ? c.messages.length - 1 : -1;
   c.messages.forEach((m, i) =>
-    wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens)));
+    wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens, i === promptAt)));
 
   // reconstructed reply
   const r = rebuild(t);
@@ -2189,15 +2296,16 @@ function renderConversation(t) {
   return wrap;
 }
 
-function messageCard(m, i, isNew, tokens) {
+function messageCard(m, i, isNew, tokens, isPrompt) {
   const role = m.role || '?';
   const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
   const kinds = [...new Set(blocks.map(b => b.type))];
-  const d = el('details', `card msg ${role}${isNew ? ' new' : ''}`);
+  const d = el('details', `card msg ${role}${isNew ? ' new' : ''}${isPrompt ? ' prompt' : ''}`);
   const color = role === 'user' ? 'var(--cyan)' : 'var(--purple)';
   d.innerHTML = `<summary><span class="caret">▶</span>
     <span class="who" style="color:${color}">${esc(role.toUpperCase())}</span>
     <span class="grow" style="color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(preview(blocks))}</span>
+    ${isPrompt ? '<span class="chip cyan solid" title="the text you typed: this is the turn that carries it">❯ your prompt</span>' : ''}
     ${isNew ? '<span class="chip green solid">new this turn</span>' : ''}
     ${tokens != null ? `<span class="chip accent">${nf(tokens)} tk</span>` : ''}
     <span class="chip">#${i}</span>
@@ -2222,12 +2330,17 @@ const plain = raw => String(raw ?? '')
   .trim();
 
 function preview(blocks) {
+  let reminder = '';                           // the fallback: better than a blank line
   for (const b of blocks) {
-    if (b.type === 'text' && b.text) return plain(b.text).slice(0, 120);
+    if (b.type === 'text' && b.text) {
+      if (!REMINDER.test(b.text)) return plain(b.text).slice(0, 120);
+      reminder = reminder || plain(b.text).slice(0, 120);
+      continue;
+    }
     if (b.type === 'tool_use') return `→ ${b.name}(${Object.keys(b.input ?? {}).join(', ')})`;
     if (b.type === 'tool_result') return `← result (${String(b.content ?? '').length} chars)`;
   }
-  return '';
+  return reminder;
 }
 
 function renderBlock(b) {
