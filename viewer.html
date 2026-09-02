@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -63,7 +63,7 @@ header .grow{flex:1}
 .turnitem .ttl{flex:1;font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .turnitem .r2{display:flex;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
 .turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
-/* Turnos de subagente: recuados sob o cabeçalho da task que os disparou. */
+/* Subagent turns: indented under the header of the task that spawned them. */
 .turnitem.sub{margin-left:10px;width:calc(100% - 10px);box-shadow:inset 2px 0 var(--purple)}
 .subhead{display:flex;align-items:center;gap:7px;width:100%;text-align:left;padding:7px 10px;margin:7px 0 3px;
   border-radius:8px;background:var(--panel2);border:1px solid var(--border)}
@@ -147,7 +147,7 @@ mark{background:var(--yellow);color:#000;border-radius:2px}
 .txt del{color:var(--faint)}
 .txt .mdh{font-weight:650;color:var(--text);margin:11px 0 3px;letter-spacing:-.2px;line-height:1.35}
 .txt .mdh:first-child{margin-top:0}
-/* Tabela de markdown: rola sozinha quando é larga, em vez de espremer a coluna. */
+/* Markdown table: scrolls on its own when wide, instead of squeezing the column. */
 .txt table{display:block;width:max-content;max-width:100%;overflow-x:auto;margin:9px 0;font-size:12.5px}
 .txt th,.txt td{padding:5px 10px;white-space:normal;vertical-align:top}
 .txt th{text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--text);border-bottom:1px solid var(--border)}
@@ -191,7 +191,7 @@ td.wrap{word-break:break-word;white-space:normal}
 .kpi b{display:block;font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.5px}
 .kpi span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
 
-/* ---------- composição do prompt / reuso ---------- */
+/* ---------- prompt composition / reuse ---------- */
 .stack{display:flex;height:28px;border-radius:7px;overflow:hidden;background:var(--panel3);margin:12px 0 8px}
 .stack i{display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden;white-space:nowrap;
   font-family:var(--mono);font-size:11px;font-weight:700;color:#0b0d12}
@@ -206,7 +206,7 @@ td.num{font-family:var(--mono);text-align:right;white-space:nowrap;width:1%}
 tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--panel2)}
 .card.tablecard{overflow-x:auto}
 tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
-/* A faixa que separa um pedido do usuário do seguinte na tabela de turnos. */
+/* The band that separates one user request from the next in the turns table. */
 tr.pedido td{background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:11px;
   padding-top:9px;padding-bottom:5px;border-top:1px solid var(--border)}
 tr.pedido b{color:var(--text)}
@@ -214,8 +214,8 @@ tr.pedido b{color:var(--text)}
 .legend b{color:var(--text);font-weight:600}
 .legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
 
-/* ---------- diagnóstico de cache ---------- */
-/* A borda esquerda do painel dá o veredito de relance. */
+/* ---------- cache diagnosis ---------- */
+/* The panel's left border gives the verdict at a glance. */
 .reuse.v-ok{border-left:3px solid var(--green)}
 .reuse.v-cauda{border-left:3px solid var(--yellow)}
 .reuse.v-parcial{border-left:3px solid var(--orange)}
@@ -224,8 +224,8 @@ tr.pedido b{color:var(--text)}
 .reuse.v-frio{border-left:3px solid var(--cyan)}
 .reuse.v-sem-marcador{border-left:3px solid var(--faint)}
 .reuse.v-sem-dados{border-left:3px solid var(--border)}
-/* Mapa de breakpoints: duas faixas na mesma escala — onde estão os marcadores,
-   e onde a cobrança do provider realmente caiu. */
+/* Breakpoint map: two bands on the same scale — where the markers are, and
+   where the provider's billing actually landed. */
 .bpwrap{margin:2px 0 18px}
 .bplabel{display:flex;justify-content:space-between;gap:10px;font-family:var(--mono);font-size:10.5px;
   color:var(--faint);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 5px}
@@ -257,11 +257,11 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
   <header>
     <div class="logo">Open<span>Code</span> · Audit</div>
     <div class="sep"></div>
-    <select id="sessionSel" title="Sessão"></select>
-    <input id="search" type="search" placeholder="Buscar no conteúdo dos turnos…" style="width:280px">
+    <select id="sessionSel" title="Session"></select>
+    <input id="search" type="search" placeholder="Search inside the turns…" style="width:280px">
     <div class="grow"></div>
-    <button class="btn" id="themeBtn" title="Alternar tema">◐</button>
-    <button class="btn" id="loadBtn">Abrir pasta…</button>
+    <button class="btn" id="themeBtn" title="Toggle theme">◐</button>
+    <button class="btn" id="loadBtn">Open folder…</button>
   </header>
   <div id="main">
     <aside id="side"></aside>
@@ -271,47 +271,47 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
 
 <div id="drop">
   <div class="box">
-    <h2>Visualizador de logs de auditoria</h2>
-    <p>Arraste aqui a pasta com os logs (a raiz do audit, ou uma sessão), ou selecione-a abaixo.</p>
-    <button class="btn" id="pickBtn" style="padding:9px 18px">Selecionar pasta…</button>
+    <h2>Audit log viewer</h2>
+    <p>Drop the folder with the logs here (the audit root, or a single session), or pick it below.</p>
+    <button class="btn" id="pickBtn" style="padding:9px 18px">Select folder…</button>
     <input type="file" id="fileInput" webkitdirectory directory multiple hidden>
     <div class="hint">
-      Tudo roda localmente no navegador — nenhum dado sai da máquina.<br>
-      Alternativa: <code>python3 -m http.server 8000</code> na pasta e abrir
-      <code>localhost:8000/viewer.html</code> (carrega sozinho).<br>Formatos: OpenCode (stream SSE) e harness-audit (resposta final).
+      Everything runs locally in the browser — no data leaves the machine.<br>
+      Alternative: <code>python3 -m http.server 8000</code> in the folder, then open
+      <code>localhost:8000/viewer.html</code> (it loads by itself).<br>Formats: OpenCode (SSE stream) and harness-audit (final response).
     </div>
   </div>
 </div>
 
 <script>
 /* =========================================================================
-   Estado
+   State
    ========================================================================= */
 const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupDeltas: true,
-            // Escopo da lista lateral: 'all', 'root' (só a conversa principal) ou o id de
-            // um subagente; `collapsed` guarda os grupos recolhidos.
+            // Scope of the sidebar list: 'all', 'root' (the main conversation only) or the
+            // id of a subagent; `collapsed` holds the folded groups.
             scope: 'all', collapsed: new Set() };
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
-const nf = n => (n ?? 0).toLocaleString('pt-BR');
-/** Um contador que o provider não reporta. Ausente não é zero: um diz que o
- *  modelo não tem esse cache, o outro que o cache estava lá e não pegou. */
+const nf = n => (n ?? 0).toLocaleString('en-US');
+/** A counter the provider does not report. Absent is not zero: one says the
+ *  model has no such cache, the other that the cache was there and missed. */
 const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : nf(n);
-/** A conta do GitHub Copilot é feita em créditos, e um crédito é um centavo de
- *  dólar. Os preços da tabela são créditos por 1M de tokens. */
+/** GitHub Copilot bills in credits, and one credit is one US cent. The prices
+ *  in the table below are credits per 1M tokens. */
 const CREDIT_USD = 0.01;
-/** Dinheiro. Abaixo de um centavo mostra quatro casas em vez de "US$ 0,00":
- *  agora que o custo vale para qualquer provedor, e n\u00e3o s\u00f3 para os cr\u00e9ditos do
- *  Copilot, uma sess\u00e3o curta cabe inteira dentro do arredondamento. */
+/** Money. Below one cent it shows four decimals instead of "$0.00": now that
+ *  cost applies to any provider, and not only to Copilot credits, a short
+ *  session fits entirely inside the rounding. */
 const money = (n, d) => n == null ? '\u2014'
-  : 'US$ ' + n.toLocaleString('pt-BR', (() => {
+  : '$' + n.toLocaleString('en-US', (() => {
       const c = d ?? (n > 0 && n < 0.01 ? 4 : 2);
       return { minimumFractionDigits: c, maximumFractionDigits: c };
     })());
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
-/** Intervalo leg\u00edvel. Uma pausa entre turnos pode ser de segundos ou de horas,
- *  e "38646.85s" n\u00e3o diz a ningu\u00e9m que a sess\u00e3o dormiu at\u00e9 o dia seguinte. */
+/** Readable interval. A pause between turns can be seconds or hours, and
+ *  "38646.85s" tells nobody that the session slept until the next day. */
 const dur = n => {
   if (n == null) return '\u2014';
   if (n < 90) return n.toFixed(n < 10 ? 2 : 0) + 's';
@@ -322,19 +322,19 @@ const dur = n => {
 const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
 
 /* =========================================================================
-   Preço do GitHub Copilot
+   GitHub Copilot pricing
    =========================================================================
- *  Créditos por 1M de tokens, no billing por uso (a partir de 1º/jun/2026).
- *  Só vale para turnos do Copilot: nos outros provedores a tela não fala de
- *  dinheiro, porque o preço aqui é o da revenda do Copilot e não o do provider.
+ *  Credits per 1M tokens, on usage-based billing (as of Jun 1, 2026). It only
+ *  applies to Copilot turns: for other providers this is the wrong number,
+ *  because the price here is Copilot's resale, not the provider's own.
  *
- *  `write: null` é a linha da tabela que traz "—": ali o cache write não é item
- *  próprio, os tokens gravados entram como input e são cobrados como tal.
- *  `limit` é o corte de contexto — acima dele a tarifa é a `high`, e quem decide
- *  é o tamanho do prompt do turno, que é o que o provedor mede.
+ *  `write: null` is the table row that reads "—": there cache write is not a
+ *  line item of its own, and the written tokens count and bill as input.
+ *  `limit` is the context cut-off — above it the rate is `high`, and what
+ *  decides is the turn's prompt size, which is what the provider measures.
  *
- *  Modelo que não está aqui fica fora da conta, e a tela diz quais foram: um
- *  total incompleto que se apresenta como completo é pior que total nenhum. */
+ *  A model missing from here stays out of the total, and the screen says which
+ *  ones: an incomplete total presenting itself as complete beats no total. */
 const COPILOT_PRICES = {
   'claude-haiku-4.5':   { in: 100, cached: 10,   write: 125,  out: 500 },
   'claude-sonnet-4.6':  { in: 300, cached: 30,   write: 375,  out: 1500 },
@@ -359,26 +359,26 @@ const COPILOT_PRICES = {
   'mai-code-1.1-flash': { in: 20,  cached: 2,    write: null, out: 120 },
 };
 
-/** O turno passou pelo Copilot. `provider` vem do id do provedor no harness
- *  (`github-copilot`) ou, quando ele não se identifica, do host da requisição
- *  (`api.githubcopilot.com`) — os dois trazem a palavra. */
+/** The turn went through Copilot. `provider` comes from the harness's provider
+ *  id (`github-copilot`) or, when it does not identify itself, from the request
+ *  host (`api.githubcopilot.com`) — both carry the word. */
 const isCopilot = t => String(t.provider ?? '').toLowerCase().includes('copilot');
 
-/** O id do modelo como a tabela o nomeia: sem o prefixo do provedor que alguns
- *  harnesses colam na frente, e em minúsculas. */
+/** The model id as the table names it: without the provider prefix some
+ *  harnesses paste in front, and lowercased. */
 const copilotModel = m => String(m ?? '').toLowerCase().split('/').pop();
 
-/** A tarifa do modelo, já escolhida a faixa de contexto. `null` quando o modelo
- *  não está na tabela — e aí o turno não entra na conta. */
+/** The model's rate, context tier already picked. `null` when the model is not
+ *  in the table — and then the turn stays out of the total. */
 function copilotPrice(model, promptTokens) {
   const row = COPILOT_PRICES[copilotModel(model)];
   if (!row) return null;
   return row.limit ? (promptTokens > row.limit ? row.high : row.low) : row;
 }
 
-/** A tabela de créditos do Copilot lida como as tarifas do turno: em dólares por
- *  1M de tokens, com os mesmos quatro nomes que o plugin grava. `null` quando o
- *  turno não é do Copilot ou o modelo não está na tabela. */
+/** The Copilot credit table read as the turn's rates: in dollars per 1M tokens,
+ *  under the same four names the plugin records. `null` when the turn is not
+ *  Copilot's or the model is not in the table. */
 function copilotRates(t) {
   if (!isCopilot(t)) return null;
   const u = t.usage ?? {};
@@ -387,45 +387,44 @@ function copilotRates(t) {
   return {
     input: p.in * CREDIT_USD,
     cache_read: p.cached * CREDIT_USD,
-    // `write: null` na tabela é a linha em que o cache write não é item próprio:
-    // os tokens gravados são cobrados como input.
+    // `write: null` in the table is the row where cache write is not a line item
+    // of its own: the written tokens are billed as input.
     cache_write: (p.write ?? p.in) * CREDIT_USD,
     output: p.out * CREDIT_USD,
   };
 }
 
 /* =========================================================================
-   Custo do turno
+   Cost of a turn
    =========================================================================
- *  Duas fontes, nesta ordem.
+ *  Two sources, in this order.
  *
- *  A primeira é o próprio turno: desde a v2 o plugin grava `rates_per_million`,
- *  a tarifa que o catálogo do opencode dava para aquele modelo no instante em
- *  que a requisição saiu. É a tarifa do provedor, vale para todos eles, e não
- *  envelhece porque é um fato daquele momento — não uma tabela nossa tentando
- *  acompanhar o mercado.
+ *  The first is the turn itself: since v2 the plugin records `rates_per_million`,
+ *  the rate opencode's model catalog gave for that model at the instant the
+ *  request went out. It is the provider's rate, it holds for all of them, and it
+ *  does not go stale because it is a fact of that moment — not a table of ours
+ *  trying to keep up with the market.
  *
- *  A segunda é a tabela de créditos do Copilot, que continua aqui porque ali o
- *  dinheiro é outro: o que sai do pacote do plano é a revenda, não a tarifa de
- *  lista do provedor. Log antigo, sem tarifa gravada, também cai nela.
+ *  The second is the Copilot credit table, still here because the money there is
+ *  a different money: what leaves the plan's allowance is the resale price, not
+ *  the provider's list rate. An old log, with no rate recorded, falls here too.
  *
- *  Sem nenhuma das duas o turno não entra na conta, e a tela diz quais ficaram
- *  de fora — um total incompleto que se apresenta como completo é pior que
- *  total nenhum.
+ *  With neither, the turn stays out of the total, and the screen says which ones
+ *  were left out — an incomplete total presenting itself as complete is worse
+ *  than no total at all.
  *
- *  As duas se misturam por componente, e não em bloco. O catálogo chega ao
- *  plugin já com os buracos preenchidos por zero (`cache_write ?? 0` lá dentro),
- *  então uma tarifa ausente e uma tarifa gratuita chegam aqui idênticas — e a
- *  primeira, tomada por zero, apaga da fatura o balde inteiro. Foi o que
- *  aconteceu com `cache_write` do claude-sonnet-5 no Copilot: meio milhão de
- *  tokens a US$ 2,50/1M saindo de graça, quase metade da conta. A regra que
- *  desfaz o empate é o próprio turno: tarifa zerada com token daquele tipo para
- *  cobrar é dado que faltou, não preço. */
+ *  The two mix per component, not in blocks. The catalog reaches the plugin with
+ *  its holes already filled by zero (`cache_write ?? 0` inside it), so a missing
+ *  rate and a free rate arrive here identical — and the first, taken for zero,
+ *  erases a whole bucket from the bill. That is what happened to `cache_write`
+ *  for claude-sonnet-5 on Copilot: half a million tokens at $2.50/1M going out
+ *  free, nearly half the bill. What breaks the tie is the turn itself: a zeroed
+ *  rate with tokens of that kind to bill is missing data, not a price. */
 const RATE_FIELDS = ['input', 'cache_read', 'cache_write', 'output'];
 
-/** As quatro tarifas do turno em dólares por 1M, com a origem de cada uma.
- *  `furos` são os componentes que o catálogo não trouxe e outra fonte cobriu:
- *  eles entram no total, mas a tela precisa dizer que entraram estimados. */
+/** The turn's four rates in dollars per 1M, each with its origin. `furos` are
+ *  the components the catalog did not bring and another source covered: they go
+ *  into the total, but the screen has to say they went in estimated. */
 function tarifas(t) {
   if ('_tarifas' in t) return t._tarifas;
   const out = calcTarifas(t);
@@ -441,52 +440,52 @@ function calcTarifas(t) {
   const rates = {}, furos = [];
   for (const f of RATE_FIELDS) {
     const v = r?.[f];
-    // Tarifa boa: veio um número maior que zero, ou veio zero e não há token
-    // desse tipo neste turno — zero sem o que cobrar não muda nada.
+    // Good rate: it came greater than zero, or it came zero and there is no
+    // token of that kind in this turn — zero with nothing to bill changes nothing.
     if (v > 0 || (v === 0 && !(u[f] ?? 0))) { rates[f] = v; continue; }
-    // Buraco. A tabela de créditos primeiro, porque no Copilot é ela que diz o
-    // que sai do pacote; depois a tarifa de input, que é o piso do cache write
-    // em todo provedor que cobra por ele.
+    // A hole. The credit table first, because on Copilot it is the one that says
+    // what leaves the allowance; then the input rate, which is the floor for
+    // cache write on every provider that charges for it.
     const alt = cred?.[f] ?? (f === 'cache_write' ? (r?.input || cred?.input) : null);
     if (alt > 0) { rates[f] = alt; furos.push(f); }
     else rates[f] = v ?? 0;
   }
-  return { rates, furos, base: r ? 'catálogo do opencode' : 'créditos do Copilot' };
+  return { rates, furos, base: r ? 'opencode catalog' : 'Copilot credits' };
 }
 
 function custo(t) {
   const x = tarifas(t); if (!x) return null;
   const u = t.usage, r = x.rates;
-  // `reasoning` não entra somado: já está dentro de `output`.
+  // `reasoning` is not added in: it is already inside `output`.
   return ((u.input ?? 0) * r.input
         + (u.cache_read ?? 0) * r.cache_read
         + (u.cache_write ?? 0) * r.cache_write
         + (u.output ?? 0) * r.output) / 1e6;
 }
 
-/** Turno com tokens que ficou de fora da conta por não haver tarifa nenhuma.
- *  Vale para qualquer provedor: antes só o Copilot era conferido, e um turno de
- *  outro provedor sem tarifa gravada sumia do total sem aviso — foi assim que a
- *  chamada de título saiu da fatura calada. */
+/** A turn with tokens that stayed out of the total because there was no rate at
+ *  all. It holds for any provider: before, only Copilot was checked, and a turn
+ *  from another provider with no recorded rate vanished from the total without a
+ *  word — that is how the title call left the bill in silence. */
 const semPreco = t => !!t.usage?.total && tarifas(t) == null;
 
-/** Componentes que este turno pagou com tarifa emprestada. */
+/** Components this turn paid for with a borrowed rate. */
 const furosDe = t => tarifas(t)?.furos ?? [];
 
-/** De onde saiu o custo desta sessão, para a tela poder nomear a moeda. Quando
- *  as duas fontes aparecem na mesma sessão o nome diz as duas: somar revenda com
- *  tarifa de lista dá um número que não é nenhuma das duas coisas. */
+/** Where this session's cost came from, so the screen can name the currency.
+ *  When both sources show up in the same session the name says both: adding
+ *  resale to list price gives a number that is neither of the two things. */
 function fonteCusto(turns) {
   const fs = [...new Set(turns.map(t => tarifas(t)?.base).filter(Boolean))];
   return fs.length ? fs.join(' + ') : null;
 }
 
-/* Os dois diários que o plugin mantém ao lado dos turnos. */
+/* The two journals the plugin keeps alongside the turns. */
 const TOOL_FILE = 'tools.jsonl';
 const EVENT_FILE = 'events.jsonl';
 
 /* =========================================================================
-   Carregamento (drag&drop / picker / http auto)
+   Loading (drag&drop / picker / http auto)
    ========================================================================= */
 const API_LABEL = {
   'anthropic': 'anthropic · messages',
@@ -494,15 +493,15 @@ const API_LABEL = {
   'openai-responses': 'openai · responses',
   'gemini': 'google · generateContent',
   'bedrock': 'bedrock · converse',
-  'unknown': 'dialeto desconhecido',
+  'unknown': 'unknown dialect',
 };
-// Dialetos que o viewer sabe desmontar sozinho (conversa, stream). Para os
-// demais ele usa o que o plugin já decodificou.
+// Dialects the viewer can take apart on its own (conversation, stream). For the
+// rest it uses what the plugin already decoded.
 const NATIVE_API = new Set(['anthropic', 'openai-chat', 'openai-responses']);
 const apiLabel = a => API_LABEL[a] ?? a ?? '—';
 
-/** Descobre o dialeto da API a partir do corpo/eventos: os logs do harness
- *  misturam Anthropic Messages, OpenAI Chat Completions e OpenAI Responses. */
+/** Works out the API dialect from the body/events: the harness logs mix
+ *  Anthropic Messages, OpenAI Chat Completions and OpenAI Responses. */
 function detectApi(t) {
   const b = t.request?.body ?? {};
   if (Array.isArray(b.contents)) return 'gemini';
@@ -522,7 +521,7 @@ function detectApi(t) {
   return 'anthropic';
 }
 
-/** Texto de um content OpenAI (string, lista de partes ou objeto). */
+/** Text of an OpenAI content (string, list of parts, or object). */
 function textOf(c) {
   if (c == null) return '';
   if (typeof c === 'string') return c;
@@ -532,7 +531,7 @@ function textOf(c) {
 
 const parseArgs = raw => { try { return JSON.parse(raw || '{}'); } catch { return { _raw_arguments: raw }; } };
 
-/** Converte uma mensagem/item OpenAI (chat ou responses) para os blocos do viewer. */
+/** Converts an OpenAI message/item (chat or responses) into the viewer's blocks. */
 function normMsg(m) {
   if (m.type === 'function_call' || m.type === 'custom_tool_call')
     return { role: 'assistant', content: [{ type: 'tool_use', id: m.call_id ?? m.id, name: m.name, input: parseArgs(m.arguments) }] };
@@ -562,7 +561,7 @@ function normMsg(m) {
   return { role: m.role ?? 'assistant', content: blocks };
 }
 
-/** Um turno do Gemini: `contents[].parts[]`, com `model` no lugar de assistant. */
+/** A Gemini turn: `contents[].parts[]`, with `model` in place of assistant. */
 function geminiMsg(c) {
   const blocks = [];
   for (const p of c.parts ?? []) {
@@ -576,14 +575,14 @@ function geminiMsg(c) {
                     content: textOf(r.output ?? r.result ?? r.content ?? r) });
     }
     else if (p.inlineData || p.fileData) blocks.push({ type: 'image', ...p });
-    // A assinatura do raciocínio volta ao modelo sem o texto, como na Anthropic.
+    // The reasoning signature goes back to the model without the text, as on Anthropic.
     else if (p.thoughtSignature) blocks.push({ type: 'thinking', thinking: '', signature: p.thoughtSignature });
     else blocks.push(p);
   }
   return { role: c.role === 'model' ? 'assistant' : (c.role ?? 'user'), content: blocks };
 }
 
-/** Um turno do Bedrock Converse: blocos sem `type`, a chave é o tipo. */
+/** A Bedrock Converse turn: blocks with no `type` — the key is the type. */
 function bedrockMsg(m) {
   const blocks = [];
   for (const b of m.content ?? []) {
@@ -599,11 +598,11 @@ function bedrockMsg(m) {
   return { role: m.role ?? 'user', content: blocks };
 }
 
-/** Ferramentas nos cinco formatos → {name, description, input_schema}. */
+/** Tools in all five formats → {name, description, input_schema}. */
 function normTools(tools) {
   const out = [];
   for (const t of tools ?? []) {
-    // Gemini agrupa as declarações; Bedrock embrulha cada uma em toolSpec.
+    // Gemini groups the declarations; Bedrock wraps each one in toolSpec.
     if (Array.isArray(t.functionDeclarations ?? t.function_declarations)) {
       for (const d of t.functionDeclarations ?? t.function_declarations)
         out.push({ name: d.name, description: d.description, input_schema: d.parameters ?? d.parametersJsonSchema });
@@ -623,18 +622,18 @@ function normTools(tools) {
   return out;
 }
 
-/** Normaliza os formatos de log conhecidos para uma forma canônica.
+/** Normalizes the known log formats into one canonical shape.
  *  A) "stream"  — OpenCode: {turn, model, request:{method,url,headers,body}, response:{status,events,raw}, usage}
- *  B) "final"   — harness-audit: {request:<body>, response:<mensagem final da API>}
+ *  B) "final"   — harness-audit: {request:<body>, response:<the API's final message>}
  */
 function normalizeTurn(raw, fileName, mtime) {
   const m = /turn[_-]?(\d+)/i.exec(fileName);
   const num = raw.turn ?? (m ? +m[1] : 0);
 
   if (raw.request && raw.request.body) {
-    // O plugin passou a decodificar o prompt e a resposta ele mesmo. Quando
-    // esses campos vêm no log, eles mandam: são os números do provider, não
-    // uma releitura do viewer.
+    // The plugin now decodes the prompt and the reply itself. When those fields
+    // come in the log, they win: they are the provider's numbers, not the
+    // viewer's re-reading of them.
     const decoded = !!(raw.prompt || raw.usage?.source);
     const t = { ...raw, turn: num, _format: decoded ? 'audit2' : 'stream' };
     const dialect = raw.prompt?.dialect;
@@ -662,10 +661,10 @@ function normalizeTurn(raw, fileName, mtime) {
     session: res.id ?? null,
     started_at: mtime ? new Date(mtime).toISOString() : null,
     _approxTime: !!mtime,
-    elapsed_seconds: null,                       // não registrado neste formato
+    elapsed_seconds: null,                       // not recorded in this format
     request: { method: null, url: null, headers: null, body },
     response: {
-      status: res.error ? 500 : null,   // este formato não registra o código HTTP
+      status: res.error ? 500 : null,   // this format does not record the HTTP code
       headers: null, bytes: null, events: null, raw: null,
       content: res.content ?? [],
       stop_reason: res.stop_reason ?? null,
@@ -683,16 +682,17 @@ function normalizeTurn(raw, fileName, mtime) {
   };
 }
 
-/** Troca cada `{"$ref":<hash>}` pela peça que o `pieces.jsonl` da sessão guarda.
- *  O plugin escreve o prompt uma vez por sessão em vez de uma vez por turno; aqui
- *  ele volta a ser o registro inteiro. Log antigo não tem ref nenhuma e passa
- *  intacto; peça faltando vira um marcador visível, não uma tela quebrada. */
+/** Swaps every `{"$ref":<hash>}` for the piece the session's `pieces.jsonl`
+ *  holds. The plugin writes the prompt once per session instead of once per
+ *  turn; here it becomes the whole record again. An old log has no refs at all
+ *  and passes through untouched; a missing piece becomes a visible marker, not
+ *  a broken screen. */
 function hydrate(value, store) {
   if (Array.isArray(value)) return value.map(v => hydrate(v, store));
   if (!value || typeof value !== 'object') return value;
   const keys = Object.keys(value);
   if (keys.length === 1 && keys[0] === '$ref')
-    return store?.get(value.$ref) ?? { _peça_ausente: value.$ref };
+    return store?.get(value.$ref) ?? { _missing_piece: value.$ref };
   const out = {};
   for (const [k, v] of Object.entries(value)) out[k] = hydrate(v, store);
   return out;
@@ -700,24 +700,24 @@ function hydrate(value, store) {
 
 function ingest(files) {                       // files: [{path, text, mtime}]
   const map = new Map();
-  const stores = new Map();                    // sessão -> Map(hash, peça)
-  const crus = [];                             // turnos, hidratados na 2ª passada
+  const stores = new Map();                    // session -> Map(hash, piece)
+  const crus = [];                             // turns, hydrated on the 2nd pass
   for (const f of files) {
     const parts = f.path.split('/').filter(Boolean);
     const name = parts.pop();
-    const sid = parts.pop() || 'sessão';
+    const sid = parts.pop() || 'session';
     if (name === 'pieces.jsonl') {
       const store = stores.get(sid) ?? new Map();
       for (const line of f.text.split('\n')) {
         if (!line) continue;
-        try { const p = JSON.parse(line); store.set(p.h, p.b); } catch { /* linha truncada */ }
+        try { const p = JSON.parse(line); store.set(p.h, p.b); } catch { /* truncated line */ }
       }
       stores.set(sid, store);
       continue;
     }
-    // Execuções de ferramenta e eventos de sessão: o que o plugin sabe por
-    // dentro do opencode e nunca passa pela rede. Pertencem à sessão, não a um
-    // turno — uma ferramenta roda entre dois turnos, não dentro de um.
+    // Tool runs and session events: what the plugin knows from inside opencode
+    // and never goes over the wire. They belong to the session, not to a turn —
+    // a tool runs between two turns, not inside one.
     if (name === TOOL_FILE || name === EVENT_FILE) {
       if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
       const alvo = map.get(sid);
@@ -725,7 +725,7 @@ function ingest(files) {                       // files: [{path, text, mtime}]
       alvo[chave] = alvo[chave] ?? [];
       for (const line of f.text.split('\n')) {
         if (!line) continue;
-        try { alvo[chave].push(JSON.parse(line)); } catch { /* linha truncada */ }
+        try { alvo[chave].push(JSON.parse(line)); } catch { /* truncated line */ }
       }
       continue;
     }
@@ -735,7 +735,7 @@ function ingest(files) {                       // files: [{path, text, mtime}]
     if (name === 'summary.json') map.get(sid).summary = data;
     else if (data && (data.turn != null || data.request)) crus.push({ sid, name, data, mtime: f.mtime, path: f.path });
   }
-  // Só agora: o depósito pode ter chegado depois do turno que aponta para ele.
+  // Only now: the store may have arrived after the turn that points into it.
   for (const t of crus) {
     const data = hydrate(t.data, stores.get(t.sid));
     try {
@@ -743,26 +743,25 @@ function ingest(files) {                       // files: [{path, text, mtime}]
       Object.defineProperty(turn, '_raw', { value: data, enumerable: false });
       map.get(t.sid).turns.push(turn);
     }
-    catch (e) { console.warn('turno ignorado:', t.path, e); }
+    catch (e) { console.warn('turn skipped:', t.path, e); }
   }
-  // Uma pasta, uma sessão. O plugin escreve `<sessão>/turn_*.json` — a mesma
-  // pasta toda vez que a sessão é retomada —, então a pasta que contém os
-  // turnos já é a unidade certa: agrupar por ela basta. `runs/` só tem os
-  // resumos de cada processo e nenhum turno; o filtro abaixo o descarta, assim
-  // como as pastas de run do formato antigo.
+  // One folder, one session. The plugin writes `<session>/turn_*.json` — the
+  // same folder every time the session is resumed —, so the folder holding the
+  // turns is already the right unit: grouping by it is enough. `runs/` only has
+  // the per-process summaries and no turns; the filter below drops it, along
+  // with the run folders of the old format.
   const sessions = [...map.values()].filter(s => s.turns.length);
   sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
   sessions.sort((a, b) => b.id.localeCompare(a.id));
-  if (!sessions.length) { alert('Nenhum log válido encontrado nessa pasta.'); return; }
+  if (!sessions.length) { alert('No valid log found in that folder.'); return; }
   S.sessions = sessions; S.sid = sessions[0].id; S.sel = 'overview';
   $('#drop').hidden = true; $('#app').hidden = false;
   renderSessionSelect(); render();
 }
 
-/** O que vale a pena ler de uma pasta de log: os turnos, o depósito de peças
- *  deles, e os dois diários que o plugin mantém ao lado — execuções de
- *  ferramenta e eventos de sessão. `turns.jsonl` é índice, o mesmo que já está
- *  nos turnos. */
+/** What is worth reading from a log folder: the turns, their piece store, and
+ *  the two journals the plugin keeps alongside — tool runs and session events.
+ *  `turns.jsonl` is an index, the same thing already in the turns. */
 const queremos = name =>
   name.endsWith('.json') || name === 'pieces.jsonl' || name === TOOL_FILE || name === EVENT_FILE;
 
@@ -795,13 +794,13 @@ $('#fileInput').onchange = async e => {
   ingest(out);
 };
 
-// auto-load quando servido por http
+// auto-load when served over http
 (async function auto() {
   if (!location.protocol.startsWith('http')) return;
   let files = null;
   const out = [];
   const enc = p => p.split('/').map(encodeURIComponent).join('/');
-  async function walk(dir, depth) {             // varre até 4 níveis (base/<run>/<sessão>/)
+  async function walk(dir, depth) {             // walks up to 4 levels (base/<run>/<session>/)
     if (depth > 4) return;
     const idx = await (await fetch('./' + enc(dir))).text();
     for (const m of idx.matchAll(/href="([^"?/]+\.jsonl?)"/g)) {
@@ -818,22 +817,22 @@ $('#fileInput').onchange = async e => {
     }
   }
   try { await walk('', 1); if (out.length) files = out; }
-  catch (e) { console.warn('auto-load indisponível:', e); return; }
+  catch (e) { console.warn('auto-load unavailable:', e); return; }
   if (files) ingest(files);
 })();
 
 /* =========================================================================
-   Helpers de leitura dos turnos
+   Turn-reading helpers
    ========================================================================= */
 const session = () => S.sessions.find(s => s.id === S.sid);
 const turns = () => session()?.turns ?? [];
 
-/** Reconstrói a resposta do assistente a partir dos eventos SSE (qualquer dialeto). */
+/** Rebuilds the assistant's reply from the SSE events (any dialect). */
 function rebuild(turn) {
   const evs = turn.response?.events;
-  // O plugin já remonta a resposta, e para todos os dialetos. O viewer só faz
-  // isso por conta própria nos que ele conhece a fundo (blocos com id,
-  // assinatura, ordem original) — nos demais, o do plugin é melhor que nada.
+  // The plugin already reassembles the reply, for every dialect. The viewer only
+  // does it on its own for the ones it knows in depth (blocks with id, signature,
+  // original order) — for the rest, the plugin's version beats nothing.
   if (turn.reply && (!evs || turn._native === false)) {
     const blocks = [];
     if (turn.reply.reasoning) blocks.push({ type: 'thinking', thinking: turn.reply.reasoning });
@@ -843,7 +842,7 @@ function rebuild(turn) {
     return { blocks, start: null, stop: null, streamed: !!evs,
              stop_reason: turn.reply.stop_reason ?? null, fromPlugin: true };
   }
-  if (!evs) {                                  // formato "final": conteúdo já vem pronto
+  if (!evs) {                                  // "final" format: content arrives ready
     return {
       blocks: turn.response?.content ?? [],
       start: null, stop: null, streamed: false,
@@ -878,7 +877,7 @@ function rebuildAnthropic(evs) {
   return { blocks: blocks.filter(Boolean), start, delta, stop, stop_reason: delta?.delta?.stop_reason ?? null };
 }
 
-/** OpenAI Chat Completions: chunks com `choices[].delta`. */
+/** OpenAI Chat Completions: chunks with `choices[].delta`. */
 function rebuildOpenAIChat(evs) {
   const calls = new Map();
   let text = '', reasoning = '', stop_reason = null, start = null, usage = null;
@@ -908,7 +907,7 @@ function rebuildOpenAIChat(evs) {
   return { blocks, start, stop: null, stop_reason, usage };
 }
 
-/** OpenAI Responses: eventos `response.*` acumulados por output_index. */
+/** OpenAI Responses: `response.*` events accumulated by output_index. */
 function rebuildOpenAIResponses(evs) {
   const items = new Map();
   const at = i => { let it = items.get(i); if (!it) items.set(i, it = { type: 'message', text: '', _json: '' }); return it; };
@@ -952,9 +951,9 @@ function rebuildOpenAIResponses(evs) {
   return { blocks, start, stop: null, stop_reason, final };
 }
 
-/** Estatísticas + normalização do contexto do request (os três dialetos). */
+/** Stats + normalization of the request context (all three dialects). */
 function ctxStats(turn) {
-  if (turn._ctx) return turn._ctx;              // request pode ter centenas de KB
+  if (turn._ctx) return turn._ctx;              // a request can be hundreds of KB
   const body = turn.request?.body ?? {};
   const api = turn._api ?? 'anthropic';
   let sys = [], messages = [];
@@ -977,7 +976,7 @@ function ctxStats(turn) {
   }
   const sysChars = sys.reduce((a, s) => a + (s.text || '').length, 0);
   const msgChars = JSON.stringify(messages).length;
-  // Bedrock guarda as ferramentas em toolConfig, não em tools.
+  // Bedrock keeps the tools in toolConfig, not in tools.
   const rawTools = api === 'bedrock' ? body.toolConfig?.tools : body.tools;
   const toolChars = JSON.stringify(rawTools ?? []).length;
   const ctx = { sys, sysChars, msgChars, toolChars, tools: normTools(rawTools), messages };
@@ -985,12 +984,12 @@ function ctxStats(turn) {
   return ctx;
 }
 
-/** Composição do prompt: onde os tokens do contexto foram parar.
+/** Prompt composition: where the context tokens ended up.
  *
- *  Quando o log traz `prompt`, os números são os do provider — o total cobrado
- *  do prompt, rateado entre as partes por caracteres — e somam exatamente o
- *  `usage.prompt`. Nos logs antigos cai para chars/4, que é só uma ordem de
- *  grandeza. `tokens.source` diz qual dos dois está na tela. */
+ *  When the log carries `prompt`, the numbers are the provider's — the billed
+ *  prompt total, split across the parts by character count — and they add up to
+ *  `usage.prompt` exactly. On older logs it falls back to chars/4, which is only
+ *  an order of magnitude. `tokens.source` says which of the two is on screen. */
 function composition(t) {
   if (t._comp) return t._comp;
   const p = t.prompt;
@@ -1007,7 +1006,7 @@ function composition(t) {
           chars: p.totals?.system_chars ?? 0,   pieces: p.system ?? [] },
         { key: 'tools',    label: 'Tools',     color: 'var(--orange)', tokens: p.tokens.tools ?? 0,
           chars: p.totals?.tools_chars ?? 0,    pieces: p.tools ?? [] },
-        { key: 'messages', label: 'Mensagens', color: 'var(--green)',  tokens: p.tokens.messages ?? 0,
+        { key: 'messages', label: 'Messages',  color: 'var(--green)',  tokens: p.tokens.messages ?? 0,
           chars: p.totals?.messages_chars ?? 0, pieces: p.messages ?? [] },
       ],
     };
@@ -1030,13 +1029,13 @@ function composition(t) {
     });
     const sum = a => a.reduce((x, y) => x + y.tokens, 0);
     comp = {
-      measured: false, source: 'caracteres / 4 (o log não traz a contagem por parte)',
+      measured: false, source: 'characters / 4 (the log carries no per-part count)',
       cpt: 4, chars: c.sysChars + c.toolChars + c.msgChars,
       total: sum(sysPieces) + sum(toolPieces) + sum(msgPieces),
       groups: [
         { key: 'system',   label: 'System',    color: 'var(--accent)', tokens: sum(sysPieces),  chars: c.sysChars,  pieces: sysPieces },
         { key: 'tools',    label: 'Tools',     color: 'var(--orange)', tokens: sum(toolPieces), chars: c.toolChars, pieces: toolPieces },
-        { key: 'messages', label: 'Mensagens', color: 'var(--green)',  tokens: sum(msgPieces),  chars: c.msgChars,  pieces: msgPieces },
+        { key: 'messages', label: 'Messages',  color: 'var(--green)',  tokens: sum(msgPieces),  chars: c.msgChars,  pieces: msgPieces },
       ],
     };
   }
@@ -1048,12 +1047,12 @@ const groupOf = (comp, key) => comp.groups.find(g => g.key === key);
 const pctOf = (v, total) => total ? (v / total * 100) : 0;
 
 /* =========================================================================
-   Diagnóstico de cache: a lógica de cache funcionou neste turno?
+   Cache diagnosis: did the caching work on this turn?
    ========================================================================= */
 
-/** A ordem em que o provider monta o prefixo cacheável — que não é a ordem em
- *  que a tela mostra as partes. Na Anthropic as tools vêm antes do system, e é
- *  por isso que um único marcador no bloco de system cobre as tools também. */
+/** The order in which the provider assembles the cacheable prefix — which is not
+ *  the order the screen shows the parts in. On Anthropic the tools come before
+ *  the system block, which is why a single marker on system covers tools too. */
 function wireOrder(api) {
   return api === 'anthropic' || api === 'bedrock'
     ? ['tools', 'system', 'messages']
@@ -1062,18 +1061,18 @@ function wireOrder(api) {
 
 const VERDICT = {
   'ok':           { label: 'cache ok',     chip: 'green',  glyph: '●' },
-  'cauda':        { label: 'cauda longa',  chip: 'yellow', glyph: '◒' },
-  'parcial':      { label: 'parcial',      chip: 'orange', glyph: '◐' },
-  'quebrou':      { label: 'prefixo quebrou', chip: 'red', glyph: '⟂' },
-  'falhou':       { label: 'não pegou',    chip: 'red',    glyph: '⟂' },
-  'expirou':      { label: 'TTL expirou',  chip: 'purple', glyph: '◔' },
-  'frio':         { label: 'início frio',  chip: 'cyan',   glyph: '○' },
-  'sem-marcador': { label: 'sem marcador', chip: '',       glyph: '·' },
-  'sem-dados':    { label: 'sem dados',    chip: '',       glyph: '·' },
+  'cauda':        { label: 'long tail',    chip: 'yellow', glyph: '◒' },
+  'parcial':      { label: 'partial',      chip: 'orange', glyph: '◐' },
+  'quebrou':      { label: 'prefix broke', chip: 'red',    glyph: '⟂' },
+  'falhou':       { label: 'no hit',       chip: 'red',    glyph: '⟂' },
+  'expirou':      { label: 'TTL expired',  chip: 'purple', glyph: '◔' },
+  'frio':         { label: 'cold start',   chip: 'cyan',   glyph: '○' },
+  'sem-marcador': { label: 'no marker',    chip: '',       glyph: '·' },
+  'sem-dados':    { label: 'no data',      chip: '',       glyph: '·' },
 };
 
-/** O turno anterior da mesma conversa na rede. A cadeia de reuso do plugin é
- *  por sessão, então um subagente não pode ser diffado contra a mãe. */
+/** The previous turn of the same conversation on the wire. The plugin's reuse
+ *  chain is per session, so a subagent cannot be diffed against its parent. */
 function prevTurn(t) {
   const list = (S.sessions.find(s => s.turns.includes(t))?.turns) ?? [];
   let best = null;
@@ -1083,9 +1082,9 @@ function prevTurn(t) {
   return best;
 }
 
-/** O prompt na ordem do fio, com o total acumulado até cada parte e onde estão
- *  os marcadores. O acumulado é o que um marcador ali colocado passa a cobrir —
- *  é esse número que o turno seguinte pode ler do cache. */
+/** The prompt in wire order, with the running total up to each part and where
+ *  the markers are. The running total is what a marker placed there covers —
+ *  that is the number the next turn can read back from the cache. */
 function promptSeq(t) {
   if (t._seq) return t._seq;
   const comp = composition(t);
@@ -1106,12 +1105,13 @@ function promptSeq(t) {
   return out;
 }
 
-/** O trecho da frente deste prompt que é byte a byte o prompt anterior.
+/** The front stretch of this prompt that is byte for byte the previous prompt.
  *
- *  System e tools vêm antes das mensagens no fio, então mudança neles zera
- *  tudo; passando por eles, o prefixo vai até a última mensagem que o diff do
- *  plugin deu por idêntica. O provider casa o prefixo inteiro, não só até onde
- *  havia um marcador — foi o que os logs mostraram, e é o que esta conta segue. */
+ *  System and tools come before the messages on the wire, so a change in them
+ *  zeroes everything; past those, the prefix runs to the last message the
+ *  plugin's diff called identical. The provider matches the whole prefix, not
+ *  only up to where a marker was — that is what the logs showed, and what this
+ *  calculation follows. */
 function identicalPrefix(seq, R) {
   if (!R || R.system_changed || R.tools_changed) return 0;
   let end = 0;
@@ -1122,11 +1122,11 @@ function identicalPrefix(seq, R) {
   return end;
 }
 
-/** Até onde os turnos recentes chegaram a gravar.
+/** How far the recent turns actually wrote.
  *
- *  Um prefixo idêntico só volta do cache se alguém o tiver gravado, e o que se
- *  grava termina no último marcador. Olhar mais de um turno para trás importa:
- *  uma requisição que falhou depois de sair ainda deixou gravado o que gravou. */
+ *  An identical prefix only comes back from the cache if someone wrote it, and
+ *  what gets written ends at the last marker. Looking more than one turn back
+ *  matters: a request that failed after going out still wrote what it wrote. */
 function cachedUpTo(t, back = 3) {
   let best = 0;
   for (let p = prevTurn(t), n = 0; p && n < back; p = prevTurn(p), n++)
@@ -1134,13 +1134,13 @@ function cachedUpTo(t, back = 3) {
   return best;
 }
 
-/** O veredito de cache do turno, com os números que o sustentam.
+/** The turn's cache verdict, with the numbers behind it.
  *
- *  Tudo sai do que o plugin já grava: as marcações `cache_control` por parte
- *  (`prompt.*[].cache`), o diff `reuse` contra o turno anterior e o `usage` do
- *  provider. Os três baldes do prompt — `cache_read`, `cache_write` e `input` —
- *  são exatos; o rateio de tokens por parte é aproximado, então as comparações
- *  trabalham com uma faixa de tolerância. */
+ *  Everything comes from what the plugin already records: the per-part
+ *  `cache_control` markers (`prompt.*[].cache`), the `reuse` diff against the
+ *  previous turn, and the provider's `usage`. The prompt's three buckets —
+ *  `cache_read`, `cache_write` and `input` — are exact; splitting tokens across
+ *  parts is approximate, so the comparisons work with a tolerance band. */
 function cacheAudit(t) {
   if (t._cache) return t._cache;
   const u = t.usage ?? {};
@@ -1148,90 +1148,95 @@ function cacheAudit(t) {
   const { seq, marks, promptTokens, marksKnown } = promptSeq(t);
   const cr = u.cache_read ?? 0, cw = u.cache_write ?? 0;
 
-  // O TTL não vem por marcador, mas o provider diz em que janela gravou.
+  // The TTL does not come per marker, but the provider says which window it wrote in.
   const ttlSeconds = ((u.details ?? {}).cache_write_1h ?? 0) > 0 ? 3600 : 300;
   const prev = prevTurn(t);
   const gapSeconds = (prev?.started_at && t.started_at)
     ? (new Date(t.started_at) - new Date(prev.started_at)) / 1000 : null;
   const stale = gapSeconds != null && gapSeconds > ttlSeconds;
 
-  // `input` é, por definição, o que ficou depois do último marcador: o pedaço
-  // que se paga inteiro em todo turno, faça o cache o que fizer.
+  // `input` is, by definition, what is left after the last marker: the stretch
+  // that is paid for in full every turn, whatever the cache does.
   const tailTokens = u.input ?? 0;
   const afterLastMark = marks.length ? promptTokens - marks[marks.length - 1].prefixTokens : promptTokens;
 
-  // O que estava em cache e podia ter sido lido aqui — e quanto disso escapou.
+  // What was in the cache and could have been read here — and how much of it
+  // escaped.
   //
-  // Comparar `cache_write` com o conteúdo novo do turno NÃO serve: o esquema de
-  // marcadores rolantes grava, de propósito, um pedaço a mais do que apareceu
-  // de novo, e isso acusaria desperdício em turno perfeitamente são. O que vale
-  // é o encontro de duas coisas: até onde este prompt ainda é o anterior, e até
-  // onde o anterior chegou a gravar. Conferido contra os logs, esse mínimo cai
-  // a menos de dez tokens do `cache_read` que o provider reportou.
+  // Comparing `cache_write` with the turn's new content does NOT work: the
+  // rolling-marker scheme writes, on purpose, a bit more than what actually
+  // showed up new, and that would accuse a perfectly healthy turn of waste. What
+  // counts is where two things meet: how far this prompt is still the previous
+  // one, and how far the previous one got to write. Checked against the logs,
+  // that minimum lands within ten tokens of the `cache_read` the provider
+  // reported.
   const offered = cachedUpTo(t);
   const ident = identicalPrefix(seq, R);
   const reusable = Math.min(ident, offered);
-  // Sem contagem do provider não há o que comparar: `cr` seria zero por falta de
-  // dado, não por falha, e o turno acusaria a sessão inteira de perder cache.
+  // With no provider count there is nothing to compare: `cr` would be zero for
+  // lack of data, not for failure, and the turn would accuse the whole session
+  // of losing cache.
   const lost = u.total ? Math.max(0, reusable - cr) : 0;
-  // O que estava gravado e deixou de valer porque o histórico foi reescrito. É
-  // o preço da mutação, distinto do cache que estava lá e não foi lido: quando
-  // a divergência é numa mensagem antiga, tudo que vinha depois dela cai junto.
+  // What was written and stopped being valid because the history was rewritten.
+  // It is the price of the mutation, distinct from cache that was there and went
+  // unread: when the divergence is in an old message, everything after it falls
+  // with it.
   const broken = (u.total && R && !R.prefix_stable) ? Math.max(0, offered - reusable) : 0;
 
   const denom = cr + cw + (u.input ?? 0);
   const hitRate = denom ? cr / denom : null;
 
-  // Tolerância. Duas fontes de ruído: o rateio de tokens por parte é
-  // aproximado, e o provider serve o cache em blocos, então a última fração de
-  // bloco do prefixo pode não voltar. Nos logs o resíduo nunca passou de um
-  // bloco, e é essa a margem — abaixo dela não há o que acusar.
+  // Tolerance. Two sources of noise: splitting tokens across parts is
+  // approximate, and the provider serves the cache in blocks, so the prefix's
+  // last partial block may not come back. In the logs the residue never went
+  // past one block, and that is the margin — below it there is nothing to flag.
   const tol = Math.max(2048, reusable * 0.02);
-  const coldReason = !prev ? 'primeiro turno da conversa'
-    : prev.model !== t.model ? `o modelo mudou (${prev.model} → ${t.model}) e o cache é por modelo`
-    : prev.agent !== t.agent ? `o agente mudou (${prev.agent ?? '—'} → ${t.agent ?? '—'}): outro prompt`
+  const coldReason = !prev ? 'first turn of the conversation'
+    : prev.model !== t.model ? `the model changed (${prev.model} → ${t.model}) and the cache is per model`
+    : prev.agent !== t.agent ? `the agent changed (${prev.agent ?? '—'} → ${t.agent ?? '—'}): a different prompt`
     : null;
 
   let verdict, reason;
   if (!u.total) {
     verdict = 'sem-dados';
-    reason = 'o provider não contou os tokens deste turno';
+    reason = 'the provider did not count this turn\'s tokens';
   } else if (!marks.length && !cw) {
     verdict = 'sem-marcador';
     reason = cr > 0
-      ? 'o request não pediu cache — o que foi reaproveitado é cache implícito do provider'
-      : 'o request não pediu cache algum: todo o prompt é pago a preço cheio';
+      ? 'the request asked for no cache — what came back is the provider\'s implicit cache'
+      : 'the request asked for no cache at all: the whole prompt is paid at full price';
   } else if (coldReason) {
     verdict = 'frio';
     reason = coldReason;
   } else if (!cr && stale && offered) {
-    // Vale mesmo sem o diff do plugin: houve marcador lá atrás, o intervalo
-    // passou da janela, e não voltou nada. É a assinatura de TTL vencido.
+    // This holds even without the plugin's diff: there was a marker back there,
+    // the gap ran past the window, and nothing came back. It is the signature of
+    // an expired TTL.
     verdict = 'expirou';
-    reason = `${dur(gapSeconds)} desde o turno anterior, além da janela de ${ttlSeconds === 3600 ? '1h' : '5min'}`
-      + ` — ${nf(offered)} tk estavam gravados e caducaram`;
+    reason = `${dur(gapSeconds)} since the previous turn, past the ${ttlSeconds === 3600 ? '1h' : '5min'} window`
+      + ` — ${nf(offered)} tk were written and lapsed`;
   } else if (!R) {
     verdict = 'frio';
-    reason = 'não há turno anterior comparável para diffar';
+    reason = 'there is no comparable previous turn to diff against';
   } else if (!R.prefix_stable) {
     verdict = 'quebrou';
-    reason = (R.system_changed && R.tools_changed ? 'o system e as tools mudaram'
-      : R.system_changed ? 'o bloco de system mudou'
-      : R.tools_changed ? 'as tools mudaram'
-      : `a mensagem #${R.changed_at} divergiu do turno anterior`)
-      + (broken ? ` — ${nf(broken)} tk gravados deixaram de valer` : '');
+    reason = (R.system_changed && R.tools_changed ? 'system and tools both changed'
+      : R.system_changed ? 'the system block changed'
+      : R.tools_changed ? 'the tools changed'
+      : `message #${R.changed_at} diverged from the previous turn`)
+      + (broken ? ` — ${nf(broken)} written tk stopped being valid` : '');
   } else if (!cr) {
     verdict = 'falhou';
-    reason = 'o prefixo estava intacto e mesmo assim nada voltou do cache';
+    reason = 'the prefix was intact and still nothing came back from the cache';
   } else if (lost > tol) {
     verdict = 'parcial';
-    reason = `o turno anterior deixou ${nf(reusable)} tk marcados e só ${nf(cr)} voltaram`;
+    reason = `the previous turn left ${nf(reusable)} tk marked and only ${nf(cr)} came back`;
   } else if (promptTokens && tailTokens > promptTokens * 0.05) {
     verdict = 'cauda';
-    reason = 'o último marcador está longe do fim: essa cauda se repaga inteira todo turno';
+    reason = 'the last marker sits far from the end: that tail is paid for again every turn';
   } else {
     verdict = 'ok';
-    reason = 'leu de volta tudo que o turno anterior deixou marcado';
+    reason = 'read back everything the previous turn left marked';
   }
 
   const audit = {
@@ -1244,7 +1249,7 @@ function cacheAudit(t) {
   return audit;
 }
 
-/** Barra empilhada system / tools / mensagens. */
+/** Stacked bar: system / tools / messages. */
 function stackBar(comp) {
   const bar = el('div', 'stack');
   bar.innerHTML = comp.groups.map(g => {
@@ -1264,20 +1269,19 @@ function compLegend(comp) {
 /* =========================================================================
    Render: sidebar
    ========================================================================= */
-/** Totais da sessão calculados a partir dos turnos (funciona nos dois formatos).
- *  summary.json é usado só para o que os turnos não registram (ex.: duração). */
-/** Soma o usage dos turnos agrupados por uma chave — mesma forma das tabelas
- *  `by_*` do summary.json, mas derivada dos turnos, então continua certa numa
- *  fatia de sessão e também funciona nos logs antigos, que não têm essas
- *  tabelas. */
-/** Um turno falhou quando o provider respondeu erro ou quando a requisição nem
- *  chegou a virar resposta — rede cortada, timeout, abort. O segundo caso não
- *  tem status HTTP nenhum, então olhar só o status esconde a falha. */
+/** Session totals computed from the turns (works on both formats). summary.json
+ *  is used only for what the turns do not record (e.g. duration). */
+/** Sums the turns' usage grouped by a key — the same shape as summary.json's
+ *  `by_*` tables, but derived from the turns, so it stays right on a slice of a
+ *  session and also works on old logs, which have no such tables. */
+/** A turn failed when the provider answered with an error, or when the request
+ *  never became a response at all — cut network, timeout, abort. The second case
+ *  has no HTTP status, so looking only at the status hides the failure. */
 const falhou = t => !!t.error || (t.response?.status != null && t.response.status >= 400);
 
-/** Quanto o total do provider difere do que o plugin somou. Diferente de zero
- *  quer dizer contador não lido — o número da linha está por baixo do que foi
- *  cobrado, e o `*` na coluna Total é o aviso. */
+/** How far the provider's total differs from what the plugin added up. Non-zero
+ *  means a counter went unread — the row's number sits below what was actually
+ *  billed, and the `*` in the Total column is the warning. */
 const mismatch = u => (u?.details?.total_mismatch ?? 0);
 
 function buckets(turns, keyOf) {
@@ -1288,9 +1292,9 @@ function buckets(turns, keyOf) {
     const u = t.usage;
     const b = map.get(k) ?? Object.assign({ turns: 0, sem_contagem: 0, cost: 0, sem_preco: 0 },
                                           ...campos.map(f => ({ [f]: 0 })));
-    // O turno conta na linha mesmo sem contagem — um turno recusado que some da
-    // tabela vira uma soma que não fecha com o total da sessão. Só os tokens
-    // ficam de fora, porque não houve tokens.
+    // The turn counts in the row even with no usage — a refused turn that
+    // vanishes from the table turns into a sum that does not match the session
+    // total. Only the tokens stay out, because there were no tokens.
     b.turns++;
     if (!u) b.sem_contagem++;
     else for (const f of campos) b[f] += u[f] ?? 0;
@@ -1301,8 +1305,8 @@ function buckets(turns, keyOf) {
   for (const b of map.values()) {
     const prompt = b.input + b.cache_read + b.cache_write;
     b.cache_hit_rate = prompt ? b.cache_read / prompt : null;
-    // Zero e "não se cobra aqui" não são a mesma coisa: fora do Copilot a
-    // coluna mostra travessão, não US$ 0,00.
+    // Zero and "nothing is billed here" are not the same thing: with no rate the
+    // column shows a dash, not $0.00.
     b.cost = b.cost || null;
   }
   return map.size ? Object.fromEntries(map) : null;
@@ -1310,17 +1314,18 @@ function buckets(turns, keyOf) {
 
 const shortId = id => (id ?? '').replace(/^ses_/, '').slice(0, 10);
 
-/** Um turno é de subagente quando a sessão que o mandou não é a dona da pasta.
- *  `root_session` é a decisão do próprio plugin — quem ele resolveu como raiz —,
- *  e `parent_session` cobre o log gravado antes desse campo existir. */
+/** A turn belongs to a subagent when the session that sent it is not the folder's
+ *  owner. `root_session` is the plugin's own call — whoever it resolved as the
+ *  root — and `parent_session` covers logs written before that field existed. */
 const isSub = t => (t.root_session && t.session ? t.root_session !== t.session : !!t.parent_session);
 const parentOf = t => t.parent_session ?? t.root_session ?? null;
 
-/** Como os turnos da pasta se dividem entre a conversa e os subagentes que ela
- *  disparou. Um subagente é uma sessão própria na rede — id e turnos seus —, mas
- *  o trabalho é de quem o chamou: o plugin arquiva tudo na pasta da mãe, e aqui a
- *  gente separa de novo, só para mostrar. Log antigo, sem `parent_session`, cai no
- *  caso vazio e a tela fica como sempre foi. */
+/** How the folder's turns split between the conversation and the subagents it
+ *  spawned. A subagent is a session of its own on the wire — its own id and its
+ *  own turns — but the work belongs to whoever called it: the plugin files it all
+ *  under the parent's folder, and here we split it apart again, just to show it.
+ *  An old log, with no `parent_session`, falls into the empty case and the screen
+ *  looks as it always did. */
 function groups(s) {
   const subs = new Map();
   for (const t of s.turns) {
@@ -1339,17 +1344,17 @@ function groups(s) {
   return { root, subs };
 }
 
-/** A mediana de uma lista de números. `null` quando não há o que medir. */
+/** The median of a list of numbers. `null` when there is nothing to measure. */
 const mediana = xs => {
   if (!xs.length) return null;
   const o = [...xs].sort((a, b) => a - b), m = o.length >> 1;
   return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
 };
 
-/** Tokens de saída por segundo de stream, somando só os turnos que streamaram.
- *  Somar tempo e tokens antes de dividir dá o ritmo da sessão; dividir turno a
- *  turno e tirar a média deixaria uma resposta de três tokens pesar tanto
- *  quanto uma de três mil. */
+/** Output tokens per second of stream, counting only the turns that streamed.
+ *  Adding time and tokens before dividing gives the session's pace; dividing turn
+ *  by turn and averaging would let a three-token reply weigh as much as a
+ *  three-thousand-token one. */
 function taxaGeracao(turns) {
   let out = 0, ms = 0;
   for (const t of turns) {
@@ -1359,20 +1364,21 @@ function taxaGeracao(turns) {
   return ms ? out / (ms / 1000) : null;
 }
 
-/** O custo de cada ferramenta, em duas moedas que não se convertem uma na outra.
+/** What each tool costs, in two currencies that do not convert into each other.
  *
- *  Em token, derivado dos turnos: quanto a saída dela ocupou no prompt da
- *  primeira vez (`tokens`) e quanto reenviá-la custou em todos os turnos
- *  seguintes (`resent`). Numa conversa longa o segundo é muito maior que o
- *  primeiro — uma ferramenta que devolve demais não se paga uma vez, se paga em
- *  cada turno até o fim.
+ *  In tokens, derived from the turns: how much its output took up in the prompt
+ *  the first time (`tokens`) and what resending it cost across every turn after
+ *  that (`resent`). In a long conversation the second is far bigger than the
+ *  first — a tool that returns too much is not paid for once, it is paid for on
+ *  every turn until the end.
  *
- *  Em tempo, das execuções que o `tools.jsonl` registra: não custa token nenhum
- *  e é quase tudo que faz uma sessão parecer lenta.
+ *  In time, from the runs `tools.jsonl` records: it costs no tokens at all and is
+ *  nearly everything that makes a session feel slow.
  *
- *  A fronteira entre novo e reenviado é a mesma que o diff de reuso já traça —
- *  `stable_messages` —, então quando o prefixo quebra o que estava atrás dele
- *  volta a contar como novo. Não é erro de contagem: é o que a quebra faz. */
+ *  The border between new and resent is the same one the reuse diff already
+ *  draws — `stable_messages` — so when the prefix breaks, whatever was behind it
+ *  counts as new again. That is not a counting error: it is what the break
+ *  does. */
 function ferramentas(s) {
   const porNome = new Map();
   const linha = nome => {
@@ -1391,8 +1397,8 @@ function ferramentas(s) {
       if (novo) for (const c of m.tool_calls ?? []) if (c.name) linha(c.name).calls++;
       const rs = m.tool_results ?? [];
       if (!rs.length) return;
-      // Os tokens da linha, na proporção que os resultados ocupam dela: uma
-      // mensagem que mistura texto e resultado não entrega o texto à ferramenta.
+      // The row's tokens, in the proportion the results take up in it: a message
+      // mixing text and result does not hand the text to the tool.
       const chars = rs.reduce((a, r) => a + (r.chars ?? 0), 0);
       const total = Math.round((m.tokens ?? 0) * (m.chars ? Math.min(1, chars / m.chars) : 1));
       for (const r of rs) {
@@ -1421,63 +1427,64 @@ function ferramentas(s) {
 function sessionTotals(s) {
   const sum = s.summary ?? {};
   const add = k => s.turns.reduce((a, t) => a + (t.usage?.[k] ?? 0), 0);
-  // Tudo derivado dos próprios turnos: os campos do summary.json valem para o
-  // processo inteiro, e uma pasta pode conter mais de uma sessão.
+  // Everything derived from the turns themselves: summary.json's fields cover the
+  // whole process, and one folder may hold more than one session.
   const comReuso = s.turns.filter(t => t.reuse);
   const audits = s.turns.map(t => cacheAudit(t));
-  // Turnos que tinham cache a avaliar: um início frio ou um dialeto que não
-  // marca nada não é falha, e entrar na conta só afundaria a média.
+  // Turns that had a cache to judge: a cold start, or a dialect that marks
+  // nothing, is not a failure, and counting it would only sink the average.
   const julgados = audits.filter(a => !['frio', 'sem-marcador', 'sem-dados'].includes(a.verdict));
   const nov = {
     prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
     resent_tokens: comReuso.length ? comReuso.reduce((a, t) => a + (t.reuse.resent_tokens ?? 0), 0) : null,
     cache_lost: audits.reduce((a, x) => a + x.lost, 0),
     cache_broken: audits.reduce((a, x) => a + x.broken, 0),
-    // A média é por turno que tinha cauda a medir: um turno sem contagem entra
-    // com zero e puxaria a média para baixo por falta de dado, não por mérito.
+    // The average is per turn that had a tail to measure: a turn with no usage
+    // comes in at zero and would drag the average down for lack of data, not on
+    // merit.
     cache_tail_avg: (() => {
       const cont = s.turns.filter(t => t.usage?.total).length;
       return cont ? audits.reduce((a, x) => a + x.tailTokens, 0) / cont : 0;
     })(),
     cache_ok: julgados.length ? julgados.filter(a => a.verdict === 'ok').length / julgados.length : null,
-    // O denominador do KPI acima. Sem ele, "100%" ao lado de uma barra que
-    // mostra cinco turnos fora do verde parece contradição, e não recorte.
+    // The denominator of the KPI above. Without it, "100%" next to a bar showing
+    // five turns outside the green looks like a contradiction, not a subset.
     cache_julgados: julgados.length,
     cache_verdicts: audits.reduce((a, x) => (a[x.verdict] = (a[x.verdict] ?? 0) + 1, a), {}),
     incomplete: s.turns.filter(t => t.incomplete).length || null,
     by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
     by_agent: buckets(s.turns, t => t.agent ?? null),
-    // Uma linha por conversa arquivada aqui: a raiz e cada subagente que ela
-    // disparou. É o que responde quanto a tool `task` custou.
+    // One row per conversation filed here: the root and every subagent it
+    // spawned. It is what answers how much the `task` tool cost.
     by_session: buckets(s.turns, t => t.session ?? null),
     sub_turns: s.turns.filter(isSub).length || null,
     sub_tokens: s.turns.filter(isSub).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
     estimated_tokens: sum.estimated_tokens ?? null,
-    // Turnos cujos tokens o provider não contou: o total é estimado neles.
+    // Turns whose tokens the provider did not count: their total is estimated.
     guessed: s.turns.filter(t => t.usage?.source === 'estimated').length,
-    // E os que não têm contagem nenhuma: ficam fora dos tokens e do custo.
+    // And the ones with no count at all: they stay out of the tokens and the cost.
     sem_contagem: s.turns.filter(t => !t.usage?.total).length,
-    // Dinheiro sempre que houver tarifa: a do catálogo, gravada no turno, ou a
-    // de créditos do Copilot para os logs que vieram de lá.
+    // Money whenever there is a rate: the catalog's, recorded on the turn, or the
+    // Copilot credit one for logs that came from there.
     copilot_turns: s.turns.some(t => custo(t) != null) ? s.turns.filter(t => custo(t) != null).length : null,
     copilot_cost: s.turns.some(t => custo(t) != null)
       ? s.turns.reduce((a, t) => a + (custo(t) ?? 0), 0) : null,
     fonte_custo: fonteCusto(s.turns),
-    // Os modelos que ficaram fora da soma, para o total não passar por completo.
+    // The models left out of the sum, so the total does not pass for complete.
     copilot_sem_preco: [...new Set(s.turns.filter(semPreco).map(t => t.model))],
     copilot_sem_preco_turnos: s.turns.filter(semPreco).length,
-    // Tarifa que o catálogo não trouxe e outra fonte cobriu. O total continua
-    // sendo o melhor número disponível, mas deixa de se apresentar como exato.
+    // A rate the catalog did not bring and another source covered. The total is
+    // still the best number available, but it stops presenting itself as exact.
     custo_furos: [...new Set(s.turns.flatMap(furosDe))],
     custo_furos_turnos: s.turns.filter(t => furosDe(t).length).length,
-    // Turnos que repetiram um prompt já recusado: token pago duas vezes.
+    // Turns that repeated an already-refused prompt: tokens paid for twice.
     retries: s.turns.filter(t => t.retry_of != null).length || null,
     retry_tokens: s.turns.filter(t => t.retry_of != null).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
-    // Compactações e o que elas jogaram fora.
+    // Compactions and what they threw away.
     compactacoes: s.turns.filter(t => t.compaction).length || null,
     compact_dropped: s.turns.reduce((a, t) => a + (t.compaction?.dropped_tokens ?? 0), 0) || null,
-    // Latência: a mediana separa o provedor lento da resposta longa melhor que
-    // a média, que uma única chamada travada distorce inteira.
+    // Latency: the median separates a slow provider from a long reply better than
+    // the mean, which a single stuck call distorts entirely.
     ttft_p50: mediana(s.turns.map(t => t.timing?.first_token_ms).filter(x => x != null)),
     tps: taxaGeracao(s.turns),
     ferramentas: ferramentas(s),
@@ -1501,7 +1508,7 @@ function sessionTotals(s) {
 function renderSessionSelect() {
   const sel = $('#sessionSel');
   sel.innerHTML = S.sessions.map(s =>
-    `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turnos</option>`).join('');
+    `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turns</option>`).join('');
   sel.value = S.sid;
   sel.onchange = () => {
     S.sid = sel.value; S.sel = 'overview'; S.scope = 'all'; S.collapsed = new Set(); render();
@@ -1512,14 +1519,30 @@ function renderSide() {
   const s = session(); const totals = sessionTotals(s);
   const side = $('#side'); side.innerHTML = '';
 
+  // The money lives here, next to cache read, and not in the overview: it is the
+  // number you want without switching screens, and it is the direct reading of
+  // the cache — what came back free and what the session paid sit side by side.
+  // The `*` warns the total has a caveat; the overview is what says which one.
+  const emCreditos = (totals.fonte_custo ?? '').includes('Copilot credits');
+  const ressalvas = totals.copilot_sem_preco.length || totals.custo_furos.length;
+  const custoStat = totals.copilot_cost != null
+    ? `<div class="stat" title="${esc(totals.fonte_custo ?? '')}${
+          emCreditos ? ` · ${(totals.copilot_cost / CREDIT_USD).toFixed(1)} credits` : ''}${
+          totals.copilot_sem_preco.length ? ` · ${totals.copilot_sem_preco_turnos} turn(s) out of the total` : ''}${
+          totals.custo_furos.length ? ` · ${totals.custo_furos_turnos} turn(s) with a borrowed rate` : ''
+        }"><b style="color:var(--green)">${money(totals.copilot_cost)}</b><span>Cost${
+          ressalvas ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
+    : '';
+
   const head = el('div', 'sidehead');
-  head.innerHTML = `<h3>Sessão</h3>
+  head.innerHTML = `<h3>Session</h3>
     <div class="stats">
-      <div class="stat"><b>${nf(totals.turns)}</b><span>Turnos</span></div>
-      <div class="stat"><b style="color:${totals.errors ? 'var(--red)' : 'var(--green)'}">${nf(totals.errors)}</b><span>Erros</span></div>
+      <div class="stat"><b>${nf(totals.turns)}</b><span>Turns</span></div>
+      <div class="stat"><b style="color:${totals.errors ? 'var(--red)' : 'var(--green)'}">${nf(totals.errors)}</b><span>Errors</span></div>
       <div class="stat"><b>${nf(totals.total_tokens)}</b><span>Tokens</span></div>
-      <div class="stat"><b>${totals.elapsed_approx ? '~' : ''}${dur(totals.elapsed_seconds)}</b><span>Duração</span></div>
+      <div class="stat"><b>${totals.elapsed_approx ? '~' : ''}${dur(totals.elapsed_seconds)}</b><span>Duration</span></div>
       <div class="stat"><b>${nf(totals.cache_read)}</b><span>Cache read</span></div>
+      ${custoStat}
     </div>`;
   side.append(head);
 
@@ -1527,7 +1550,7 @@ function renderSide() {
 
   const list = el('div', 'turnlist');
   const ov = el('button', 'turnitem overview' + (S.sel === 'overview' ? ' active' : ''));
-  ov.innerHTML = `<div class="r1"><span class="num">▤</span><span class="ttl">Visão geral da sessão</span></div>`;
+  ov.innerHTML = `<div class="r1"><span class="num">▤</span><span class="ttl">Session overview</span></div>`;
   ov.onclick = () => { S.sel = 'overview'; render(); };
   list.append(ov);
 
@@ -1540,8 +1563,9 @@ function renderSide() {
     return true;
   });
 
-  // Turnos consecutivos da mesma sessão viram um bloco. Uma task pode aparecer
-  // em mais de um: a mãe volta a falar no meio, e o subagente continua depois.
+  // Consecutive turns of the same session become one block. A task can show up in
+  // more than one: the parent speaks again in the middle, and the subagent picks
+  // up afterwards.
   const blocks = [];
   for (const t of shown) {
     const sub = isSub(t) ? (t.session ?? '?') : null;
@@ -1550,8 +1574,8 @@ function renderSide() {
     else blocks.push({ sub, turns: [t], cont: blocks.some(b => b.sub === sub && sub) });
   }
 
-  // Um subagente só aparece agrupado na visão completa; escolhido no escopo, a
-  // lista já é dele e o cabeçalho não teria o que separar.
+  // A subagent only shows up grouped in the full view; once picked in the scope,
+  // the list is already its own and the header would have nothing to separate.
   for (const block of blocks) {
     const agrupado = S.scope === 'all' && block.sub;
     if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
@@ -1570,7 +1594,7 @@ function renderSide() {
           <span>${secs(t.elapsed_seconds)}</span>
           <span>${nf(t.usage?.total ?? 0)} tk</span>
           ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
-            if (A.verdict === 'ok') return '';         // o caso bom não precisa de marca
+            if (A.verdict === 'ok') return '';         // the good case needs no mark
             return `<span style="color:${V.chip ? `var(--${V.chip})` : 'var(--faint)'}"
               title="${esc(V.label)} — ${esc(A.reason)}">${V.glyph}</span>`; })()}
         </div>`;
@@ -1578,13 +1602,13 @@ function renderSide() {
       list.append(b);
     }
   }
-  if (!shown.length) list.append(el('div', 'empty', 'Nenhum turno corresponde à busca.'));
+  if (!shown.length) list.append(el('div', 'empty', 'No turn matches the search.'));
   side.append(list);
 }
 
-/** Cabeçalho de um trecho de subagente: recolhe os turnos dele. Os números são
- *  os do trecho, para bater com o que está logo abaixo; o total da task inteira
- *  fica no title. */
+/** Header of a subagent stretch: folds its turns away. The numbers are the
+ *  stretch's own, so they match what sits right below; the whole task's total
+ *  goes in the title. */
 function subHeader(g, block) {
   const closed = S.collapsed.has(g.id);
   const tokens = block.turns.reduce((a, t) => a + (t.usage?.total ?? 0), 0);
@@ -1592,20 +1616,20 @@ function subHeader(g, block) {
   b.innerHTML = `<span class="caret">▼</span>
     <span class="who">task${g.agent ? ': ' + esc(g.agent) : ''}${block.cont ? ' (cont.)' : ''}</span>
     <span class="n">${block.turns.length} · ${nf(tokens)} tk</span>`;
-  b.title = `subagente ${g.id} — disparado por ${g.parent}`
-    + ` · ${g.turns.length} turnos no total, ${nf(g.tokens)} tk`;
+  b.title = `subagent ${g.id} — spawned by ${g.parent}`
+    + ` · ${g.turns.length} turns in total, ${nf(g.tokens)} tk`;
   b.onclick = () => { closed ? S.collapsed.delete(g.id) : S.collapsed.add(g.id); render(); };
   return b;
 }
 
-/** Seletor de escopo: a pasta inteira, só a conversa principal, ou um subagente. */
+/** Scope picker: the whole folder, the main conversation only, or one subagent. */
 function scopeBar(g, s) {
   const bar = el('div', 'scopebar');
   const sel = el('select');
   const raiz = s.turns.filter(t => !isSub(t)).length;
   const opts = [
-    ['all', `Tudo · ${s.turns.length} turnos`],
-    ['root', `Só a conversa principal · ${raiz}`],
+    ['all', `Everything · ${s.turns.length} turns`],
+    ['root', `Main conversation only · ${raiz}`],
     ...[...g.subs.values()].map(x => [x.id, `task${x.agent ? ': ' + x.agent : ''} (${shortId(x.id)}) · ${x.turns.length}`]),
   ];
   sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
@@ -1615,30 +1639,30 @@ function scopeBar(g, s) {
   return bar;
 }
 
-/** Rótulo curto do turno: ferramentas chamadas, ou início do texto. */
+/** Short label for the turn: the tools it called, or the start of the text. */
 function turnLabel(t) {
-  if (t.incomplete) return 'sem resposta registrada';
+  if (t.incomplete) return 'no response recorded';
   const st = t.response?.status;
-  if (st != null && st >= 400) return `falhou · HTTP ${st}`;
-  if (t.error) return `falhou · ${t.error.message ?? 'erro de rede'}`;
+  if (st != null && st >= 400) return `failed · HTTP ${st}`;
+  if (t.error) return `failed · ${t.error.message ?? 'network error'}`;
   const r = rebuild(t);
   const tools = r.blocks.filter(b => b.type === 'tool_use').map(b => b.name);
   if (tools.length) return tools.join(', ');
   const txt = r.blocks.find(b => b.type === 'text')?.text;
   if (txt) return plain(txt).slice(0, 60);
   const th = r.blocks.find(b => b.type === 'thinking');
-  return th ? 'raciocínio' : 'resposta';
+  return th ? 'reasoning' : 'reply';
 }
 
 /* =========================================================================
-   Render: conteúdo
+   Render: content
    ========================================================================= */
 function render() {
   renderSide();
   const c = $('#content'); c.innerHTML = '';
   if (S.sel === 'overview') { c.append(renderOverview()); return; }
   const t = turns().find(x => x.turn === S.sel);
-  if (!t) return c.append(el('div', 'empty', 'Turno não encontrado.'));
+  if (!t) return c.append(el('div', 'empty', 'Turn not found.'));
   c.append(renderTurnHead(t));
   c.append(renderTabs(t));
   c.append(renderTabBody(t));
@@ -1646,22 +1670,22 @@ function render() {
   requestAnimationFrame(syncExpanders);
 }
 
-/* ---------- ferramentas ---------- */
+/* ---------- tools ---------- */
 const CORES_TOOL = ['--accent', '--orange', '--green', '--cyan', '--purple', '--yellow', '--red'];
 
-/** Onde o contexto está indo, por ferramenta.
+/** Where the context is going, by tool.
  *
- *  A coluna que importa é a última: `total` é o que a ferramenta custou de
- *  verdade, e ela é dominada por `reenviado`, não por `1ª vez`. Uma ferramenta
- *  que devolve 8 mil tokens numa conversa de quarenta turnos não custou 8 mil —
- *  custou 8 mil vezes o número de turnos que vieram depois dela. É esse número
- *  que paga uma mudança de prompt, e é ele que some quando se olha só o turno
- *  em que a ferramenta rodou. */
+ *  The column that matters is the last one: `total` is what the tool really cost,
+ *  and it is dominated by `resent`, not by `first time`. A tool that returns 8k
+ *  tokens in a forty-turn conversation did not cost 8k — it cost 8k times the
+ *  number of turns that came after it. That is the number that pays for a prompt
+ *  change, and it is the one that disappears when you look only at the turn the
+ *  tool ran in. */
 function renderFerramentas(lista) {
   const wrap = el('div');
   if (!lista?.length) return wrap;
   const total = lista.reduce((a, l) => a + l.tokens + l.resent, 0);
-  wrap.append(el('h3', null, 'Ferramentas'));
+  wrap.append(el('h3', null, 'Tools'));
 
   if (total) {
     const bar = el('div', 'stack');
@@ -1675,9 +1699,9 @@ function renderFerramentas(lista) {
   }
 
   const tbl = el('table');
-  tbl.innerHTML = `<thead><tr><th>Ferramenta</th>
-      <th class="v">Chamadas</th><th class="v">1ª vez</th><th class="v">Reenviado</th><th class="v">Total tk</th>
-      <th class="v">Execuções</th><th class="v">Falhas</th><th class="v">Tempo</th><th class="v">Saída</th></tr></thead>`;
+  tbl.innerHTML = `<thead><tr><th>Tool</th>
+      <th class="v">Calls</th><th class="v">First time</th><th class="v">Resent</th><th class="v">Total tk</th>
+      <th class="v">Runs</th><th class="v">Failures</th><th class="v">Time</th><th class="v">Output</th></tr></thead>`;
   const tb = el('tbody');
   for (const l of lista) {
     const tr = el('tr');
@@ -1688,9 +1712,9 @@ function renderFerramentas(lista) {
       <td class="v"><b>${nf(l.tokens + l.resent)}</b></td>
       <td class="v">${l.runs || '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v" style="color:${l.failed || l.errors ? 'var(--red)' : 'var(--faint)'}"${
-        l.errors ? ` title="${l.errors} resultado(s) marcados como erro pelo modelo"` : ''}>${
+        l.errors ? ` title="${l.errors} result(s) marked as errors by the model"` : ''}>${
         l.failed + l.errors || '—'}</td>
-      <td class="v"${l.msMax ? ` title="pior execução: ${nf(l.msMax)}ms"` : ''}>${
+      <td class="v"${l.msMax ? ` title="worst run: ${nf(l.msMax)}ms"` : ''}>${
         l.ms ? dur(l.ms / 1000) : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v" style="color:var(--faint)">${l.output ? bytes(l.output) : '—'}</td>`;
     tb.append(tr);
@@ -1699,39 +1723,40 @@ function renderFerramentas(lista) {
   const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
   wrap.append(card);
   wrap.append(el('div', 'foot',
-    '<b>1ª vez</b> é o que a saída da ferramenta ocupou no prompt do turno em que apareceu; '
-    + '<b>reenviado</b> é o que custou viajar em todos os turnos seguintes, que numa conversa longa é a maior parte. '
-    + 'Os tokens por linha vêm do rateio proporcional por caracteres: exatos somados, aproximados um a um. '
-    + '<b>Execuções</b> e <b>tempo</b> só existem quando o log tem <code>tools.jsonl</code>; '
-    + 'uma execução sem conclusão registrada conta como falha.'));
+    '<b>First time</b> is what the tool\'s output took up in the prompt of the turn it appeared in; '
+    + '<b>resent</b> is what it cost to travel on every turn after that, which in a long conversation is most of it. '
+    + 'The per-row tokens come from a proportional split by character count: exact in aggregate, approximate one by one. '
+    + '<b>Runs</b> and <b>time</b> only exist when the log has <code>tools.jsonl</code>; '
+    + 'a run with no recorded completion counts as a failure.'));
   return wrap;
 }
 
-/* ---------- visão geral ---------- */
+/* ---------- overview ---------- */
 function renderOverview() {
   const s = session(); const wrap = el('div');
   const tot2 = sessionTotals(s);
   const models = [...new Set(s.turns.map(t => t.model).filter(Boolean))];
-  // Uma pasta é uma conversa. Os subagentes que ela disparou têm id próprio mas
-  // são arquivados junto, então não contam como "outra sessão"; mais de uma
-  // conversa de verdade só acontece em captura antiga, e a tela diz isso.
+  // One folder is one conversation. The subagents it spawned have ids of their
+  // own but are filed alongside, so they do not count as "another session"; more
+  // than one real conversation only happens in an old capture, and the screen
+  // says so.
   const ids = [...new Set(s.turns.map(t => t.session).filter(Boolean))];
   const subs = new Set(s.turns.filter(isSub).map(t => t.session));
   const raiz = ids.filter(x => !subs.has(x));
   const streamed = s.turns.some(t => t._format === 'stream' || t._format === 'audit2');
-  wrap.append(el('div', 'thead', `<h1>Visão geral</h1>
+  wrap.append(el('div', 'thead', `<h1>Overview</h1>
     <div class="metarow">
       <span class="chip accent solid">${esc(s.id)}</span>
-      ${raiz.map(x => `<span class="chip cyan" title="id da sessão">${esc(x)}</span>`).join('')}
-      ${subs.size ? `<span class="chip purple" title="sessões próprias na rede, arquivadas junto com quem as disparou">${subs.size} subagente(s)</span>` : ''}
-      ${raiz.length > 1 ? '<span class="chip yellow" title="captura antiga: o plugin gravava um diretório por processo, e um processo atende várias sessões">várias conversas nesta pasta</span>' : ''}
+      ${raiz.map(x => `<span class="chip cyan" title="session id">${esc(x)}</span>`).join('')}
+      ${subs.size ? `<span class="chip purple" title="sessions of their own on the wire, filed alongside whoever spawned them">${subs.size} subagent(s)</span>` : ''}
+      ${raiz.length > 1 ? '<span class="chip yellow" title="old capture: the plugin wrote one directory per process, and one process serves several sessions">several conversations in this folder</span>' : ''}
       <span class="chip">${esc(s.turns[0]?.provider ?? '—')}</span>
       ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
-      <span class="chip">${s.turns[0]?._approxTime ? '~' : ''}início ${esc(fmtTime(s.turns[0]?.started_at))}</span>
-      <span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log com stream SSE' : 'log de resposta final'}</span>
+      <span class="chip">${s.turns[0]?._approxTime ? '~' : ''}started ${esc(fmtTime(s.turns[0]?.started_at))}</span>
+      <span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log with SSE stream' : 'final-response log'}</span>
       ${[...new Set(s.turns.map(t => t._api))].map(a => `<span class="chip orange">${esc(apiLabel(a))}</span>`).join('')}
     </div>`));
-  if (tot2.note) wrap.append(el('div', 'notebox', '<b>Nota do summary.json:</b> ' + esc(tot2.note)));
+  if (tot2.note) wrap.append(el('div', 'notebox', '<b>Note from summary.json:</b> ' + esc(tot2.note)));
 
   const K = (v, l, col) => `<div class="kpi"><b${col ? ` style="color:${col}"` : ''}>${v}</b><span>${l}</span></div>`;
   const tot = s.turns.reduce((a, t) => ({
@@ -1739,94 +1764,86 @@ function renderOverview() {
     cr: a.cr + (t.usage?.cache_read ?? 0), cw: a.cw + (t.usage?.cache_write ?? 0),
     r: a.r + (t.usage?.reasoning ?? 0),
   }), { i: 0, o: 0, cr: 0, cw: 0, r: 0 });
-  // O prompt tem três baldes e os três entram na conta. Deixar `cache_write` de
-  // fora do denominador faria uma sessão que regrava o prefixo a cada turno
-  // parecer perfeita — que é justamente o que se quer enxergar aqui.
+  // The prompt has three buckets and all three go into the ratio. Leaving
+  // `cache_write` out of the denominator would make a session that rewrites the
+  // prefix every turn look perfect — which is exactly what you want to see here.
   const cacheRate = (tot.cr + tot.cw + tot.i) ? (tot.cr / (tot.cr + tot.cw + tot.i) * 100) : 0;
 
-  // A fatura do Copilot é em créditos; o dólar é a leitura, o crédito é o que
-  // sai do pacote do plano — então lá o KPI mostra um e conta o outro no title.
-  // Com tarifa do catálogo o dólar já é o número, e não há crédito a converter.
-  const emCreditos = (tot2.fonte_custo ?? '').includes('créditos do Copilot');
-  const ressalvas = tot2.copilot_sem_preco.length || tot2.custo_furos.length;
-  const custoKpi = tot2.copilot_cost != null
-    ? `<div class="kpi" title="${emCreditos
-          ? (tot2.copilot_cost / CREDIT_USD).toFixed(1).replace('.', ',') + ' créditos'
-          : 'tarifa do catálogo do opencode, gravada em cada turno'}${
-        tot2.copilot_sem_preco.length ? ` · ${tot2.copilot_sem_preco_turnos} turno(s) fora da conta` : ''
-      }${
-        tot2.custo_furos.length ? ` · ${tot2.custo_furos_turnos} turno(s) com tarifa emprestada` : ''
-      }"><b style="color:var(--green)">${money(tot2.copilot_cost)}</b><span>Custo (${esc(tot2.fonte_custo ?? '—')})${
-        ressalvas ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
-    : '';
+  // Cost is not a KPI here: it lives in the session panel, next to cache read.
+  // What stays on this screen are the caveats — the panel's `*` says there is
+  // one, and down here is where it is spelled out.
 
   wrap.append(el('div', 'grid2',
-    K(nf(tot2.turns), 'Turnos') +
-    K(nf(tot2.total_tokens), 'Tokens totais') +
-    custoKpi +
+    K(nf(tot2.turns), 'Turns') +
+    K(nf(tot2.total_tokens), 'Total tokens') +
+    // What the model wrote, separated from what it read. It is the priciest slice
+    // per token and the smallest by volume, and it vanishes inside the total —
+    // which in a long session is almost all cache read.
+    K(nf(tot2.output), `Output tokens (${pctOf(tot2.output, tot2.total_tokens).toFixed(1)}% of total)`) +
     K((tot2.elapsed_approx ? '~' : '') + dur(tot2.elapsed_seconds),
-       tot2.elapsed_approx ? 'Tempo total (do summary)' : 'Tempo somado das chamadas') +
-    K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache',
+       tot2.elapsed_approx ? 'Total time (from summary)' : 'Summed call time') +
+    K(cacheRate.toFixed(1) + '%', 'Cache hit rate',
       cacheRate > 90 ? 'var(--green)' : cacheRate > 50 ? 'var(--yellow)' : 'var(--red)') +
     (tot2.cache_ok != null
       ? K((tot2.cache_ok * 100).toFixed(0) + '%',
-          `Turnos com cache ok (${nf(tot2.cache_julgados)} de ${nf(tot2.turns)} julgados)`,
+          `Turns with cache ok (${nf(tot2.cache_julgados)} of ${nf(tot2.turns)} judged)`,
           tot2.cache_ok > 0.9 ? 'var(--green)' : tot2.cache_ok > 0.6 ? 'var(--yellow)' : 'var(--red)') : '') +
-    // O que estava em cache, continuava válido, e mesmo assim foi cobrado de
-    // novo: o custo direto das falhas de cache.
+    // What was in the cache, was still valid, and got billed again anyway: the
+    // direct cost of the cache misses.
     (tot2.cache_lost
-      ? K(nf(tot2.cache_lost), 'Cache perdido', 'var(--red)') : '') +
-    // O preço de reescrever o histórico: o que estava gravado e foi invalidado.
+      ? K(nf(tot2.cache_lost), 'Cache lost', 'var(--red)') : '') +
+    // The price of rewriting history: what was written and got invalidated.
     (tot2.cache_broken
-      ? K(nf(tot2.cache_broken), 'Cache invalidado por mutação', 'var(--red)') : '') +
+      ? K(nf(tot2.cache_broken), 'Cache invalidated by mutation', 'var(--red)') : '') +
     (tot2.cache_tail_avg >= 1
-      ? K(nf(Math.round(tot2.cache_tail_avg)), 'Cauda não cacheada / turno',
+      ? K(nf(Math.round(tot2.cache_tail_avg)), 'Uncached tail / turn',
           tot2.cache_tail_avg > 1000 ? 'var(--red)' : 'var(--yellow)') : '') +
-    K(nf(tot2.errors), 'Erros', (tot2.errors ? 'var(--red)' : 'var(--green)')) +
-    // Cada quebra de prefixo é um cache miss no histórico inteiro: é o primeiro
-    // lugar para olhar quando o custo sobe.
+    K(nf(tot2.errors), 'Errors', (tot2.errors ? 'var(--red)' : 'var(--green)')) +
+    // Every prefix break is a cache miss across the whole history: it is the first
+    // place to look when the cost goes up.
     (tot2.prefix_breaks != null
-      ? K(nf(tot2.prefix_breaks), 'Quebras de prefixo', tot2.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
-    (tot2.resent_tokens != null ? K(nf(tot2.resent_tokens), 'Tokens reenviados', 'var(--yellow)') : '') +
-    (tot2.incomplete ? K(nf(tot2.incomplete), 'Turnos incompletos', 'var(--yellow)') : '') +
-    // Retentativa é desperdício puro: nada de novo foi perguntado e o prompt
-    // inteiro foi pago outra vez.
-    (tot2.retries ? K(nf(tot2.retry_tokens), `Tokens em retentativa (${tot2.retries} turno(s))`, 'var(--red)') : '') +
+      ? K(nf(tot2.prefix_breaks), 'Prefix breaks', tot2.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
+    (tot2.resent_tokens != null ? K(nf(tot2.resent_tokens), 'Resent tokens', 'var(--yellow)') : '') +
+    (tot2.incomplete ? K(nf(tot2.incomplete), 'Incomplete turns', 'var(--yellow)') : '') +
+    // A retry is pure waste: nothing new was asked and the whole prompt was paid
+    // for again.
+    (tot2.retries ? K(nf(tot2.retry_tokens), `Tokens in retries (${tot2.retries} turn(s))`, 'var(--red)') : '') +
     (tot2.compactacoes
-      ? K(nf(tot2.compact_dropped), `Tokens descartados em compactação (${tot2.compactacoes}×)`, 'var(--yellow)') : '') +
-    // Latência do provedor, separada do tempo de geração: são problemas
-    // diferentes e só um deles se resolve mexendo no prompt.
+      ? K(nf(tot2.compact_dropped), `Tokens dropped in compaction (${tot2.compactacoes}×)`, 'var(--yellow)') : '') +
+    // Provider latency, separated from generation time: they are different
+    // problems and only one of them is solved by touching the prompt.
     (tot2.ttft_p50 != null
-      ? K(Math.round(tot2.ttft_p50) + 'ms', 'Tempo até o 1º token (mediana)',
+      ? K(Math.round(tot2.ttft_p50) + 'ms', 'Time to first token (median)',
           tot2.ttft_p50 > 5000 ? 'var(--red)' : tot2.ttft_p50 > 2000 ? 'var(--yellow)' : 'var(--green)') : '') +
-    (tot2.tps != null ? K(tot2.tps.toFixed(0), 'Tokens de saída por segundo') : '') +
-    // O que a conversa gastou nos subagentes que disparou: já está nos
-    // totais acima, e aqui aparece separado.
-    (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Turnos de subagente', 'var(--purple)') : '')
+    (tot2.tps != null ? K(tot2.tps.toFixed(0), 'Output tokens per second') : '') +
+    // What the conversation spent on the subagents it spawned: it is already in
+    // the totals above, and here it shows up on its own.
+    (tot2.sub_turns ? K(nf(tot2.sub_turns), 'Subagent turns', 'var(--purple)') : '')
   ));
 
-  // O que o custo não cobre. Sem esta linha o total pareceria a fatura inteira.
+  // What the cost does not cover. Without this line the total would look like
+  // the whole bill.
   if (tot2.copilot_sem_preco.length)
-    wrap.append(el('div', 'foot', '* fora do custo: '
+    wrap.append(el('div', 'foot', '* cost — out of the total: '
       + tot2.copilot_sem_preco.map(m => esc(m)).join(', ')
-      + ` — sem tarifa gravada no turno nem preço na tabela de créditos do Copilot (${tot2.copilot_sem_preco_turnos} turno(s)).`));
-  // Tarifa que o catálogo entregou zerada tendo token daquele tipo para cobrar.
-  // Zero ali quase nunca é preço: é campo que o catálogo não preencheu, e sem
-  // este aviso o balde inteiro sairia de graça sem ninguém notar.
+      + ` — no rate recorded on the turn and no price in the Copilot credit table (${tot2.copilot_sem_preco_turnos} turn(s)).`));
+  // A rate the catalog handed over zeroed while there were tokens of that kind to
+  // bill. Zero there is almost never a price: it is a field the catalog did not
+  // fill in, and without this warning the whole bucket would go out free unnoticed.
   if (tot2.custo_furos.length)
-    wrap.append(el('div', 'foot', '* tarifa emprestada em '
+    wrap.append(el('div', 'foot', '* cost — borrowed rate for '
       + tot2.custo_furos.map(f => esc(f)).join(', ')
-      + `: o catálogo gravou zero no turno tendo token desse tipo a cobrar, e a conta usou a tabela de créditos do Copilot`
-      + ` (ou, na falta dela, a tarifa de input) em ${tot2.custo_furos_turnos} turno(s).`));
+      + `: the catalog recorded zero on the turn while there were tokens of that kind to bill, so the total used the Copilot credit table`
+      + ` (or, failing that, the input rate) on ${tot2.custo_furos_turnos} turn(s).`));
 
-  // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
+  // Distribution of the verdicts: where the caching gets it right and where it slips.
   const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
   if (vs.length) {
     const bar = el('div', 'stack');
     bar.innerHTML = vs.map(([k, n]) => {
       const w = pctOf(n, s.turns.length), V = VERDICT[k];
       const c = V.chip ? `var(--${V.chip})` : 'var(--faint)';
-      return `<i style="width:${w}%;background:${c}" title="${esc(V.label)}: ${n} turno(s)">${
+      return `<i style="width:${w}%;background:${c}" title="${esc(V.label)}: ${n} turn(s)">${
         w > 11 ? esc(V.label) : ''}</i>`;
     }).join('');
     wrap.append(bar, el('div', 'legend', vs.map(([k, n]) => {
@@ -1836,40 +1853,47 @@ function renderOverview() {
   }
   const contados = s.turns.filter(t => t.usage?.source === 'provider').length;
   if (s.turns.some(t => t.usage?.source)) {
-    // O denominador é a sessão inteira. Usar só os turnos que tiveram contagem
-    // faz o turno recusado sumir justamente da frase que serve para achá-lo.
+    // The denominator is the whole session. Using only the turns that were counted
+    // makes the refused turn vanish from the very sentence meant to find it.
     const parcial = tot2.guessed > 0 || tot2.sem_contagem > 0;
     wrap.append(el('div', parcial ? 'notebox' : 'foot',
-      (parcial ? '<b>Contagem parcial:</b> ' : '')
-      + `${contados}/${s.turns.length} turnos contados pelo provider`
-      + (tot2.guessed ? `; em ${tot2.guessed} ele não reportou nada e os tokens foram estimados por caracteres` : '')
+      (parcial ? '<b>Partial count:</b> ' : '')
+      + `${contados}/${s.turns.length} turns counted by the provider`
+      + (tot2.guessed ? `; on ${tot2.guessed} it reported nothing and the tokens were estimated from characters` : '')
       + (tot2.sem_contagem
-          ? `; ${tot2.sem_contagem} sem contagem nenhuma (recusado pelo provider ou sem resposta), fora dos tokens`
+          ? `; ${tot2.sem_contagem} with no count at all (refused by the provider or unanswered), out of the tokens`
           : '')
-      + (!parcial ? ' — números exatos' : '')
-      + (tot2.estimated_tokens ? ` · estimados à parte: ${nf(tot2.estimated_tokens.total)} tk` : '')
+      + (!parcial ? ' — exact numbers' : '')
+      + (tot2.estimated_tokens ? ` · estimated separately: ${nf(tot2.estimated_tokens.total)} tk` : '')
       + '.'));
   }
 
   wrap.append(renderFerramentas(tot2.ferramentas));
 
-  // tabela por turno
+  // per-turn table
   const tbl = el('table');
-  tbl.innerHTML = `<thead><tr><th>#</th><th>Modelo</th><th>Ação</th>
+  tbl.innerHTML = `<thead><tr><th>#</th><th>Model</th><th>Action</th>
       <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
-      <th class="v">Total</th><th class="v">Prefixo</th><th class="v">1º token</th><th class="v">Tempo</th><th class="v">Fim</th></tr></thead>`;
+      <th class="v">Total</th><th class="v">Prefix</th><th class="v">1st token</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
   const tb = el('tbody');
-  // Os turnos agrupados pelo que o usuário pediu. Um pedido vira vários turnos
-  // — cada chamada de ferramenta é outra ida ao modelo — e é o pedido, não o
-  // turno, que a pessoa reconhece como "uma coisa que eu mandei fazer".
+  // The turns grouped by what the user asked for. One request becomes several
+  // turns — every tool call is another trip to the model — and it is the request,
+  // not the turn, that a person recognizes as "one thing I asked for".
   let pedido = null;
   for (const t of s.turns) {
     if (t.request_index != null && t.request_index !== pedido && !isSub(t)) {
       pedido = t.request_index;
       const doPedido = s.turns.filter(x => x.request_index === pedido);
       const tk = doPedido.reduce((a, x) => a + (x.usage?.total ?? 0), 0);
+      // What that request cost. It is the unit a person recognizes — "that thing I
+      // asked for came to this much" — and it is not the session total divided by
+      // anything: it is the sum of the turns the request generated.
+      const cst = doPedido.reduce((a, x) => a + (custo(x) ?? 0), 0) || null;
+      const fora = doPedido.filter(semPreco).length;
       const sep = el('tr', 'pedido');
-      sep.innerHTML = `<td colspan="12"><b>pedido #${pedido}</b> · ${doPedido.length} turno(s) · ${nf(tk)} tk</td>`;
+      sep.innerHTML = `<td colspan="12"><b>request #${pedido}</b> · ${doPedido.length} turn(s) · ${nf(tk)} tk${
+        cst != null ? ` · <b${fora ? ` title="${fora} turn(s) with no rate: they count in the tokens, not in the cost"` : ''
+          }>${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
       tb.append(sep);
     }
     const u = t.usage ?? {};
@@ -1877,61 +1901,61 @@ function renderOverview() {
     const tr = el('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
-        ? ` <span class="chip purple" title="subagente ${esc(t.session ?? '?')}">sub</span>` : ''}${
+        ? ` <span class="chip purple" title="subagent ${esc(t.session ?? '?')}">sub</span>` : ''}${
         t.retry_of != null
-          ? ` <span class="chip red solid" title="repete o turno #${t.retry_of} byte a byte — ${esc(t.retry_reason ?? 'a tentativa anterior falhou')}">retry</span>` : ''}${
+          ? ` <span class="chip red solid" title="repeats turn #${t.retry_of} byte for byte — ${esc(t.retry_reason ?? 'the previous attempt failed')}">retry</span>` : ''}${
         t.compaction
-          ? ` <span class="chip yellow" title="primeiro turno depois de a história ser reescrita${
-              t.compaction.overflow ? ' — forçada por estouro de contexto' : ''}: ${nf(t.compaction.dropped_tokens ?? 0)} tk descartados">compactou</span>` : ''}</td>
+          ? ` <span class="chip yellow" title="first turn after the history was rewritten${
+              t.compaction.overflow ? ' — forced by context overflow' : ''}: ${nf(t.compaction.dropped_tokens ?? 0)} tk dropped">compacted</span>` : ''}</td>
       <td style="white-space:nowrap">${esc(t.model)}${t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
       <td>${esc(turnLabel(t))}</td>
       <td class="v">${nfOpt(u.input)}</td><td class="v" style="color:var(--cyan)">${nfOpt(u.cache_read)}</td>
       <td class="v" style="color:var(--yellow)">${nfOpt(u.cache_write)}</td>
       <td class="v" style="color:var(--purple)">${nfOpt(u.output)}</td>
-      <td class="v"${mismatch(u) ? ` title="o provider reportou ${nf(u.details.reported_total)} tokens neste turno, ${nf(Math.abs(mismatch(u)))} a ${mismatch(u) > 0 ? 'mais' : 'menos'}: há contador que o plugin não está lendo"` : ''}><b>${
+      <td class="v"${mismatch(u) ? ` title="the provider reported ${nf(u.details.reported_total)} tokens on this turn, ${nf(Math.abs(mismatch(u)))} ${mismatch(u) > 0 ? 'more' : 'fewer'}: there is a counter the plugin is not reading"` : ''}><b>${
         nfOpt(u.total)}</b>${mismatch(u) ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
-          ? '<span style="color:var(--green)">estável</span>'
-          : '<span style="color:var(--red)">quebrou</span>') : '<span style="color:var(--faint)">—</span>'}</td>
-      <td class="v"${t.timing ? ` title="1º byte ${t.timing.first_byte_ms}ms · stream ${t.timing.stream_ms}ms · ${t.timing.chunks} frames"` : ''}>${
+          ? '<span style="color:var(--green)">stable</span>'
+          : '<span style="color:var(--red)">broke</span>') : '<span style="color:var(--faint)">—</span>'}</td>
+      <td class="v"${t.timing ? ` title="1st byte ${t.timing.first_byte_ms}ms · stream ${t.timing.stream_ms}ms · ${t.timing.chunks} frames"` : ''}>${
         t.timing?.first_token_ms != null ? t.timing.first_token_ms + 'ms' : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v">${secs(t.elapsed_seconds)}</td>
       <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
-        t.incomplete ? 'incompleto' : (st ?? (t.error ? 'falhou' : esc(t.response?.stop_reason ?? '—')))}</td>`;
+        t.incomplete ? 'incomplete' : (st ?? (t.error ? 'failed' : esc(t.response?.stop_reason ?? '—')))}</td>`;
     tr.onclick = () => { S.sel = t.turn; S.tab = 'conv'; render(); };
     tb.append(tr);
   }
   tbl.append(tb);
   const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
-  wrap.append(el('h3', null, 'Turnos'), card);
+  wrap.append(el('h3', null, 'Turns'), card);
 
-  // Tokens de modelos diferentes não são o mesmo dinheiro nem o mesmo problema.
+  // Tokens from different models are neither the same money nor the same problem.
   const nomeSessao = name => esc(name) + (subs.has(name)
-    ? ' <span class="chip purple">subagente</span>'
-    : ' <span class="chip cyan">raiz</span>');
+    ? ' <span class="chip purple">subagent</span>'
+    : ' <span class="chip cyan">root</span>');
   const tabelas = [
-    ['Por modelo', tot2.by_model, null],
-    ['Por agente', tot2.by_agent, null],
-    // Só quando há mais de uma: numa conversa sem subagente a tabela repetiria
-    // os totais gerais.
+    ['By model', tot2.by_model, null],
+    ['By agent', tot2.by_agent, null],
+    // Only when there is more than one: in a conversation with no subagent the
+    // table would just repeat the overall totals.
     ...(tot2.by_session && Object.keys(tot2.by_session).length > 1
-      ? [['Por sessão', tot2.by_session, nomeSessao]] : []),
+      ? [['By session', tot2.by_session, nomeSessao]] : []),
   ];
   for (const [title, data, deco] of tabelas) {
     if (!data || !Object.keys(data).length) continue;
     const bt = el('table');
-    // A coluna de custo só existe onde há preço a aplicar: numa sessão que não
-    // é do Copilot a tabela fica exatamente como sempre foi.
+    // The cost column only exists where there is a price to apply: in a session
+    // with no rate at all the table looks exactly as it always did.
     const comCusto = !!tot2.copilot_turns;
-    bt.innerHTML = `<thead><tr><th>${esc(title.replace('Por ', ''))}</th><th class="num">Turnos</th>
+    bt.innerHTML = `<thead><tr><th>${esc(title.replace('By ', ''))}</th><th class="num">Turns</th>
       <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th><th class="num">Output</th>
       <th class="num">Total</th><th class="num">Cache</th>${
-        comCusto ? '<th class="num">Custo</th>' : ''}</tr></thead>`;
+        comCusto ? '<th class="num">Cost</th>' : ''}</tr></thead>`;
     const bb = el('tbody');
     for (const [name, v] of Object.entries(data))
       bb.innerHTML += `<tr><td style="white-space:nowrap">${deco ? deco(name) : esc(name)}</td>
         <td class="num"${v.sem_contagem
-          ? ` title="${v.sem_contagem} turno(s) sem contagem: entram aqui, mas não têm tokens"` : ''}>${
+          ? ` title="${v.sem_contagem} turn(s) with no usage: they count here, but have no tokens"` : ''}>${
           nf(v.turns)}${v.sem_contagem ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
         <td class="num">${nf(v.input)}</td>
         <td class="num" style="color:var(--cyan)">${nf(v.cache_read)}</td>
@@ -1940,7 +1964,7 @@ function renderOverview() {
         <td class="num">${nf(v.total)}</td>
         <td class="num">${v.cache_hit_rate != null ? (v.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td>${
           comCusto ? `<td class="num"${v.sem_preco
-            ? ` title="${v.sem_preco} turno(s) sem preço na tabela: entram aqui, mas não no custo"` : ''}>${
+            ? ` title="${v.sem_preco} turn(s) with no rate: they count here, but not in the cost"` : ''}>${
             v.cost != null ? money(v.cost, 4) : '—'
           }${v.sem_preco ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}</tr>`;
     bt.append(bb);
@@ -1950,30 +1974,30 @@ function renderOverview() {
   return wrap;
 }
 
-const fmtTime = s => { if (!s) return '—'; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString('pt-BR'); };
+const fmtTime = s => { if (!s) return '—'; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString('en-US'); };
 
-/* ---------- cabeçalho do turno ---------- */
+/* ---------- turn header ---------- */
 function renderTurnHead(t) {
   const u = t.usage ?? {}; const st = t.response?.status; const ok = st == null || st < 400;
   const r = rebuild(t);
   const res = t.response ?? {};
   const chip = (cls, txt) => txt == null ? '' : `<span class="chip ${cls}">${txt}</span>`;
   const h = el('div', 'thead');
-  h.innerHTML = `<h1>Turno ${t.turn}
+  h.innerHTML = `<h1>Turn ${t.turn}
       ${st != null ? `<span class="chip ${ok ? 'green' : 'red'} solid">HTTP ${st}</span>` : ''}
-      ${t.incomplete ? '<span class="chip yellow solid">incompleto</span>' : ''}
-      ${res.error ? '<span class="chip red solid">erro</span>' : ''}
-      ${t.error ? `<span class="chip red solid">falhou · ${esc(t.error.message ?? t.error.name ?? 'erro de rede')}</span>` : ''}</h1>
+      ${t.incomplete ? '<span class="chip yellow solid">incomplete</span>' : ''}
+      ${res.error ? '<span class="chip red solid">error</span>' : ''}
+      ${t.error ? `<span class="chip red solid">failed · ${esc(t.error.message ?? t.error.name ?? 'network error')}</span>` : ''}</h1>
     <div class="metarow">
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
       <span class="chip cyan">${esc(apiLabel(t._api))}</span>
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
-      ${isSub(t) ? `<span class="chip purple solid" title="sessão própria na rede (${esc(t.session ?? '?')}), arquivada na pasta de quem a disparou">subagente de ${esc(shortId(parentOf(t)))}</span>` : ''}
+      ${isSub(t) ? `<span class="chip purple solid" title="a session of its own on the wire (${esc(t.session ?? '?')}), filed in the folder of whoever spawned it">subagent of ${esc(shortId(parentOf(t)))}</span>` : ''}
       ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
       ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
-      ${u.source === 'estimated' ? '<span class="chip yellow solid">tokens estimados</span>'
-        : u.source === 'provider' ? '<span class="chip green">contagem do provider</span>' : ''}
+      ${u.source === 'estimated' ? '<span class="chip yellow solid">estimated tokens</span>'
+        : u.source === 'provider' ? '<span class="chip green">provider count</span>' : ''}
       ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
         return `<span class="chip ${V.chip} solid" title="${esc(A.reason)}">${V.glyph} ${esc(V.label)}</span>`; })()}
       ${chip('cyan', t.cache_hit_rate != null ? 'cache ' + (t.cache_hit_rate * 100).toFixed(1) + '%' : null)}
@@ -1986,7 +2010,7 @@ function renderTurnHead(t) {
         ? `<span class="chip orange solid">reasoning ${esc(t.request.body.reasoning.effort ?? 'on')}</span>` : ''}
       ${chip('', (t.request?.body?.max_tokens ?? t.request?.body?.max_output_tokens) != null
         ? 'max_tokens ' + nf(t.request.body.max_tokens ?? t.request.body.max_output_tokens) : null)}
-      ${chip('cyan', r.streamed ? null : 'sem stream no log')}
+      ${chip('cyan', r.streamed ? null : 'no stream in the log')}
     </div>`;
   const tot = (u.input ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0) + (u.output ?? 0) || 1;
   const bar = el('div', 'tokbar');
@@ -2005,22 +2029,22 @@ function renderTurnHead(t) {
      <span>total <b>${nf(u.total)}</b></span>`));
   if (t.incomplete)
     h.append(el('div', 'notebox',
-      '<b>Turno incompleto:</b> ' + esc(t.note ?? 'a resposta não chegou antes do processo encerrar.')
-      + ' A requisição está registrada, mas não há resposta nem contagem de tokens — este turno não entra nos totais.'));
+      '<b>Incomplete turn:</b> ' + esc(t.note ?? 'the response did not arrive before the process ended.')
+      + ' The request is recorded, but there is no reply and no token count — this turn stays out of the totals.'));
   return h;
 }
 
-/* ---------- abas ---------- */
+/* ---------- tabs ---------- */
 function renderTabs(t) {
   const c = ctxStats(t); const r = rebuild(t);
   const comp = composition(t);
   const defs = [
-    ['conv', 'Conversa', c.messages.length + r.blocks.length],
-    ['comp', 'Composição', nf(comp.total)],
+    ['conv', 'Conversation', c.messages.length + r.blocks.length],
+    ['comp', 'Composition', nf(comp.total)],
     ['req', 'Request', null],
     ['sys', 'System + Tools', c.tools.length],
     ...(t.response?.events ? [['stream', 'Stream', t.response.events.length]] : []),
-    ['json', 'JSON bruto', null],
+    ['json', 'Raw JSON', null],
   ];
   if (!defs.some(d => d[0] === S.tab)) S.tab = 'conv';
   const bar = el('div', 'tabs');
@@ -2044,12 +2068,12 @@ function renderTabBody(t) {
   }
 }
 
-/* ---------- aba: conversa ---------- */
+/* ---------- tab: conversation ---------- */
 function renderConversation(t) {
   const wrap = el('div');
   const c = ctxStats(t);
-  // O plugin diz exatamente até onde o prefixo é idêntico; sem ele, resta
-  // comparar a contagem de mensagens com a do turno anterior.
+  // The plugin says exactly how far the prefix is identical; without it, all
+  // that is left is comparing message counts with the previous turn.
   const prev = turns().find(x => x.turn === t.turn - 1);
   const prevLen = t.reuse ? t.reuse.stable_messages : (prev ? ctxStats(prev).messages.length : 0);
   const exact = !!t.reuse;
@@ -2059,7 +2083,7 @@ function renderConversation(t) {
     const d = el('details', 'card msg system');
     d.innerHTML = `<summary><span class="caret">▶</span><span class="who" style="color:var(--faint)">SYSTEM</span>
       <span class="grow"></span>
-      <span class="chip">${c.sys.length} bloco(s)</span>
+      <span class="chip">${c.sys.length} block(s)</span>
       <span class="chip">${nf(c.sysChars)} chars ≈ ${nf(Math.round(c.sysChars/4))} tk</span></summary>`;
     const body = el('div', 'cbody');
     c.sys.forEach((b, i) =>
@@ -2070,25 +2094,25 @@ function renderConversation(t) {
   c.messages.forEach((m, i) =>
     wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens)));
 
-  // resposta reconstruída
+  // reconstructed reply
   const r = rebuild(t);
   const d = el('details', 'card msg assistant'); d.open = true;
   d.innerHTML = `<summary><span class="caret">▶</span>
-    <span class="who" style="color:var(--purple)">ASSISTANT · resposta</span>
+    <span class="who" style="color:var(--purple)">ASSISTANT · reply</span>
     <span class="grow"></span>
-    <span class="chip ${r.streamed ? 'green' : 'cyan'} solid">${r.streamed ? '↩ reconstruída do stream' : '↩ resposta final'}</span>
+    <span class="chip ${r.streamed ? 'green' : 'cyan'} solid">${r.streamed ? '↩ rebuilt from the stream' : '↩ final response'}</span>
     ${(t.response?.status ?? 0) >= 400 ? `<span class="chip red solid">HTTP ${t.response.status}</span>` : ''}
-    <span class="chip">${r.blocks.length} bloco(s)</span>
+    <span class="chip">${r.blocks.length} block(s)</span>
     <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span></summary>`;
   const body = el('div', 'cbody');
   if (!r.blocks.length) {
     const st = t.response?.status;
     const falhou = (st != null && st >= 400) || t.error;
     body.append(el('div', falhou ? 'notebox' : 'empty', falhou
-      ? `<b>A requisição falhou${st != null ? ` com HTTP ${st}` : ''}:</b> ` +
-        esc((t.error?.message ?? textOf(t.response?.body)) || 'o provider não devolveu corpo nenhum.') +
-        ' Não há resposta para mostrar; o turno fica no log porque a requisição chegou a ser enviada.'
-      : 'Sem blocos de conteúdo na resposta.'));
+      ? `<b>The request failed${st != null ? ` with HTTP ${st}` : ''}:</b> ` +
+        esc((t.error?.message ?? textOf(t.response?.body)) || 'the provider returned no body at all.') +
+        ' There is no reply to show; the turn stays in the log because the request did go out.'
+      : 'No content blocks in the reply.'));
   }
   r.blocks.forEach(b => body.append(renderBlock(b)));
   d.append(body); wrap.append(d);
@@ -2104,7 +2128,7 @@ function messageCard(m, i, isNew, tokens) {
   d.innerHTML = `<summary><span class="caret">▶</span>
     <span class="who" style="color:${color}">${esc(role.toUpperCase())}</span>
     <span class="grow" style="color:var(--muted);font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(preview(blocks))}</span>
-    ${isNew ? '<span class="chip green solid">novo neste turno</span>' : ''}
+    ${isNew ? '<span class="chip green solid">new this turn</span>' : ''}
     ${tokens != null ? `<span class="chip accent">${nf(tokens)} tk</span>` : ''}
     <span class="chip">#${i}</span>
     ${kinds.map(k => `<span class="chip ${k === 'tool_use' ? 'yellow' : k === 'tool_result' ? 'green' : ''}">${esc(k)}</span>`).join('')}</summary>`;
@@ -2114,8 +2138,8 @@ function messageCard(m, i, isNew, tokens) {
   return d;
 }
 
-/** Markdown vira texto corrido nos rótulos de uma linha: ali não há onde
- *  renderizar, e um `**assim**` no meio da frase só atrapalha a leitura. */
+/** Markdown becomes running text in one-line labels: there is nowhere to render
+ *  it there, and a `**like this**` mid-sentence only gets in the way. */
 const plain = raw => String(raw ?? '')
   .replace(/```[\s\S]*?```/g, ' ')
   .replace(/`([^`\n]+)`/g, '$1')
@@ -2131,7 +2155,7 @@ function preview(blocks) {
   for (const b of blocks) {
     if (b.type === 'text' && b.text) return plain(b.text).slice(0, 120);
     if (b.type === 'tool_use') return `→ ${b.name}(${Object.keys(b.input ?? {}).join(', ')})`;
-    if (b.type === 'tool_result') return `← resultado (${String(b.content ?? '').length} chars)`;
+    if (b.type === 'tool_result') return `← result (${String(b.content ?? '').length} chars)`;
   }
   return '';
 }
@@ -2141,10 +2165,10 @@ function renderBlock(b) {
     case 'text':
       return blockCard('text', 'text · ' + nf((b.text || '').length) + ' chars', b.text, true);
     case 'thinking': {
-      if (!b.thinking && b.signature) {        // reenviado ao modelo apenas como assinatura
+      if (!b.thinking && b.signature) {        // sent back to the model as a signature only
         const c = el('div', 'block thinking');
         c.append(el('div', 'bh', `<span>◇ thinking</span><span style="flex:1"></span>
-          <span class="chip">conteúdo não retido · assinatura ${nf(b.signature.length)} chars</span>`));
+          <span class="chip">content not retained · signature ${nf(b.signature.length)} chars</span>`));
         return c;
       }
       return blockCard('thinking', 'thinking · ' + nf((b.thinking || '').length) + ' chars', b.thinking, true);
@@ -2163,7 +2187,7 @@ function renderBlock(b) {
       const c = el('div', 'block tool_result');
       c.append(el('div', 'bh', `<span>✓ tool_result</span>
         <span style="flex:1"></span>
-        ${b.is_error ? '<span class="chip red solid">erro</span>' : ''}
+        ${b.is_error ? '<span class="chip red solid">error</span>' : ''}
         <span class="chip">${nf(txt.length)} chars</span>
         <span class="chip">${esc(b.tool_use_id ?? '')}</span>`));
       c.append(preBody(highlight(esc(txt))));
@@ -2176,7 +2200,7 @@ function renderBlock(b) {
       return c;
     }
     default:
-      return blockCard(b.type || 'bloco', b.type || 'bloco', JSON.stringify(b, null, 2));
+      return blockCard(b.type || 'block', b.type || 'block', JSON.stringify(b, null, 2));
   }
 }
 
@@ -2189,7 +2213,7 @@ function blockCard(kind, title, text, rich) {
   return c;
 }
 
-/** Corpo colapsável com "expandir", "ver fonte" (quando `src` é dado) e "copiar". */
+/** Collapsible body with "expand", "view source" (when `src` is given) and "copy". */
 function preBody(html, isJson, rich, open, src) {
   const wrap = el('div');
   const body = el('div', 'bb');
@@ -2197,30 +2221,30 @@ function preBody(html, isJson, rich, open, src) {
   if (rich) { pre.className = 'clip txt'; }
   if (open) pre.classList.remove('clip');
   body.append(pre); wrap.append(body);
-  const btn = el('button', 'expander', open ? 'recolher ▴' : 'expandir ▾');
-  pre.__btn = btn;                       // medido sob demanda por syncExpanders()
+  const btn = el('button', 'expander', open ? 'collapse ▴' : 'expand ▾');
+  pre.__btn = btn;                       // measured on demand by syncExpanders()
   btn.onclick = () => {
     const open = pre.classList.toggle('clip');
-    btn.textContent = open ? 'expandir ▾' : 'recolher ▴';
+    btn.textContent = open ? 'expand ▾' : 'collapse ▴';
   };
   const bar = el('div');
   bar.style.cssText = 'display:flex';
   btn.style.flex = '1';
-  const cp = el('button', 'expander', 'copiar');
+  const cp = el('button', 'expander', 'copy');
   cp.style.cssText = 'flex:none;width:88px;border-left:1px solid var(--border)';
-  // Lê o <pre> na hora do clique: em "ver fonte" o que se quer copiar é o
-  // texto original, não o preview renderizado.
-  cp.onclick = () => { navigator.clipboard.writeText(pre.textContent); cp.textContent = 'copiado ✓'; setTimeout(() => cp.textContent = 'copiar', 1200); };
+  // Reads the <pre> at click time: under "view source" what you want to copy is
+  // the original text, not the rendered preview.
+  cp.onclick = () => { navigator.clipboard.writeText(pre.textContent); cp.textContent = 'copied ✓'; setTimeout(() => cp.textContent = 'copy', 1200); };
   bar.append(btn);
   if (src != null) {
-    const tog = el('button', 'expander', 'ver fonte');
+    const tog = el('button', 'expander', 'view source');
     tog.style.cssText = 'flex:none;width:104px;border-left:1px solid var(--border)';
     let source = false;
     tog.onclick = () => {
       source = !source;
       pre.classList.toggle('txt', !source);
       pre.innerHTML = source ? highlight(esc(src)) : html;
-      tog.textContent = source ? 'ver markdown' : 'ver fonte';
+      tog.textContent = source ? 'view markdown' : 'view source';
     };
     bar.append(tog);
   }
@@ -2228,8 +2252,9 @@ function preBody(html, isJson, rich, open, src) {
   return wrap;
 }
 
-/** Mede os <pre> já visíveis e remove o botão dos que não estouram a altura.
- *  Feito sob demanda porque conteúdo dentro de <details> fechado mede 0. */
+/** Measures the already-visible <pre>s and drops the button from the ones that do
+ *  not overflow. Done on demand because content inside a closed <details>
+ *  measures 0. */
 function syncExpanders() {
   for (const pre of $('#content').querySelectorAll('pre.clip')) {
     if (pre.__checked || !pre.__btn || pre.offsetParent === null) continue;
@@ -2239,38 +2264,38 @@ function syncExpanders() {
 }
 $('#content').addEventListener('toggle', () => requestAnimationFrame(syncExpanders), true);
 
-/** Rodapé por veredito: o que aquele diagnóstico quer dizer, e o que olhar. */
+/** Per-verdict footer: what that diagnosis means, and what to look at. */
 const VERDICT_FOOT = {
-  'ok': 'O turno só acrescentou ao fim do contexto: tudo que o provider podia reaproveitar continua lá, '
-      + 'na mesma ordem, e ele devolveu do cache.',
-  'cauda': 'O prefixo se manteve, mas o último marcador está longe do fim do prompt. O que vem depois dele '
-      + 'nunca entra em cache: é pago a preço cheio neste turno e em todos os próximos. Mover o marcador '
-      + 'para o fim das mensagens resolve.',
-  'parcial': 'O prefixo se manteve e o cache respondeu, mas por menos do que o turno anterior tinha deixado '
-      + 'gravado. A diferença estava lá, válida, e foi cobrada de novo. Costuma ser marcador que não avançou '
-      + 'junto com a conversa, ou uma marcação que mudou de escopo entre um turno e outro.',
-  'quebrou': 'Algo antes do fim do contexto mudou, então o cache do prefixo inteiro foi perdido — é aqui que '
-      + 'o custo escapa. A causa quase sempre é reescrever uma mensagem já enviada (mover ou remover um '
-      + 'system-reminder, por exemplo); o certo é só acrescentar ao fim. Marcadores que apenas mudam de '
-      + 'lugar não contam como quebra.',
-  'falhou': 'O prefixo estava intacto e ainda assim nada voltou do cache. Vale conferir se o marcador saiu no '
-      + 'request, se o modelo é o mesmo e se a janela do TTL não fechou.',
-  'expirou': 'O prefixo estava intacto, mas o intervalo entre os turnos passou da janela do cache e a entrada '
-      + 'foi descartada. Um TTL mais longo (1h) evita isso em sessões com pausas.',
-  'frio': 'Não havia o que reaproveitar: é o começo de uma cadeia de cache, não uma falha. O que este turno '
-      + 'gravar é o que os próximos vão ler.',
-  'sem-marcador': 'O request não trouxe nenhum `cache_control`, então não há cache explícito para avaliar. '
-      + 'Todo o prompt é cobrado como input a cada turno, salvo o que o provider cachear por conta própria.',
-  'sem-dados': 'Sem contagem de tokens do provider para este turno, não há como julgar o cache.',
+  'ok': 'The turn only appended to the end of the context: everything the provider could reuse is still there, '
+      + 'in the same order, and it served it from the cache.',
+  'cauda': 'The prefix held, but the last marker sits far from the end of the prompt. Whatever comes after it '
+      + 'never gets cached: it is paid at full price on this turn and on every turn to come. Moving the marker '
+      + 'to the end of the messages fixes it.',
+  'parcial': 'The prefix held and the cache answered, but for less than the previous turn had left written. '
+      + 'The difference was there, valid, and got billed again. It is usually a marker that did not move forward '
+      + 'with the conversation, or a marking that changed scope between one turn and the next.',
+  'quebrou': 'Something before the end of the context changed, so the whole prefix cache was lost — this is where '
+      + 'the cost escapes. The cause is almost always rewriting an already-sent message (moving or removing a '
+      + 'system-reminder, for example); the right move is to only append at the end. Markers that merely change '
+      + 'position do not count as a break.',
+  'falhou': 'The prefix was intact and still nothing came back from the cache. Worth checking whether the marker '
+      + 'actually went out in the request, whether the model is the same, and whether the TTL window closed.',
+  'expirou': 'The prefix was intact, but the gap between turns ran past the cache window and the entry was '
+      + 'discarded. A longer TTL (1h) avoids this in sessions with pauses.',
+  'frio': 'There was nothing to reuse: this is the start of a cache chain, not a failure. What this turn writes '
+      + 'is what the next ones will read.',
+  'sem-marcador': 'The request carried no `cache_control` at all, so there is no explicit cache to judge. The '
+      + 'whole prompt is billed as input every turn, apart from whatever the provider caches on its own.',
+  'sem-dados': 'With no token count from the provider for this turn, there is no way to judge the cache.',
 };
 
-/** Painel de cache: o veredito do turno e os números que o sustentam.
+/** Cache panel: the turn's verdict and the numbers behind it.
  *
- *  Junta o diff de prefixo (quanto deste prompt é o anterior, byte a byte) com
- *  os três baldes que o provider cobra — lido do cache, gravado agora, e a
- *  cauda paga cheia — porque é a combinação dos dois que diz se a lógica de
- *  cache funcionou. Um prefixo estável com marcador no lugar errado ainda
- *  desperdiça dinheiro, e só a comparação denuncia. */
+ *  It joins the prefix diff (how much of this prompt is the previous one, byte
+ *  for byte) with the three buckets the provider bills — read from cache,
+ *  written now, and the tail paid in full — because it is the combination of the
+ *  two that says whether the caching worked. A stable prefix with a marker in the
+ *  wrong place still wastes money, and only the comparison shows it. */
 function cachePanel(t) {
   const A = cacheAudit(t);
   const V = VERDICT[A.verdict];
@@ -2284,21 +2309,21 @@ function cachePanel(t) {
   box.innerHTML =
     `<span class="lead" style="color:${col}">${V.glyph} ${esc(V.label)}</span>
      <span class="chip">${esc(A.reason)}</span>
-     ${R ? `<span class="chip">vs. turno ${R.previous_turn}</span>` : ''}
-     ${R ? `<span class="chip cyan">${nf(R.stable_messages)} ${R.stable_messages === 1 ? 'msg idêntica' : 'msgs idênticas'} · ${nf(resent)} tk reenviados</span>` : ''}
-     ${R ? `<span class="chip green">${nf(R.added_messages)} ${R.added_messages === 1 ? 'msg nova' : 'msgs novas'} · ${nf(fresh)} tk</span>` : ''}
-     ${R?.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg sumiram</span>` : ''}
-     ${R?.changed_at != null ? `<span class="chip red solid">divergiu na msg #${R.changed_at}</span>` : ''}
-     ${R?.system_changed ? '<span class="chip red solid">system mudou</span>' : ''}
-     ${R?.tools_changed ? '<span class="chip red solid">tools mudaram</span>' : ''}
-     ${A.reusable > 0 ? `<span class="chip ${A.lost > 0 ? 'yellow' : 'green'}" title="maior prefixo que o turno anterior deixou gravado e que continua idêntico aqui">${nf(A.reusable)} tk reaproveitáveis</span>` : ''}
-     ${A.lost > 0 ? `<span class="chip red solid" title="estavam em cache, continuavam válidos, e mesmo assim foram cobrados de novo">perdidos ${nf(A.lost)} tk</span>` : ''}
-     ${A.broken > 0 ? `<span class="chip red solid" title="estavam gravados no turno anterior e foram invalidados pela reescrita do histórico">invalidados ${nf(A.broken)} tk</span>` : ''}
-     ${A.tailTokens > 0 ? `<span class="chip ${A.verdict === 'cauda' ? 'yellow solid' : 'yellow'}" title="prompt depois do último marcador: pago a preço cheio em todo turno">cauda ${nf(A.tailTokens)} tk</span>` : ''}
-     ${A.marksKnown ? `<span class="chip ${A.marksUsed > A.marksLimit ? 'red solid' : A.marksUsed ? '' : 'yellow'}">${A.marksUsed}/${A.marksLimit} breakpoints</span>` : '<span class="chip yellow">marcadores não registrados</span>'}
+     ${R ? `<span class="chip">vs. turn ${R.previous_turn}</span>` : ''}
+     ${R ? `<span class="chip cyan">${nf(R.stable_messages)} identical msg${R.stable_messages === 1 ? '' : 's'} · ${nf(resent)} tk resent</span>` : ''}
+     ${R ? `<span class="chip green">${nf(R.added_messages)} new msg${R.added_messages === 1 ? '' : 's'} · ${nf(fresh)} tk</span>` : ''}
+     ${R?.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg(s) gone</span>` : ''}
+     ${R?.changed_at != null ? `<span class="chip red solid">diverged at msg #${R.changed_at}</span>` : ''}
+     ${R?.system_changed ? '<span class="chip red solid">system changed</span>' : ''}
+     ${R?.tools_changed ? '<span class="chip red solid">tools changed</span>' : ''}
+     ${A.reusable > 0 ? `<span class="chip ${A.lost > 0 ? 'yellow' : 'green'}" title="the longest prefix the previous turn left written that is still identical here">${nf(A.reusable)} tk reusable</span>` : ''}
+     ${A.lost > 0 ? `<span class="chip red solid" title="they were in the cache, still valid, and got billed again anyway">lost ${nf(A.lost)} tk</span>` : ''}
+     ${A.broken > 0 ? `<span class="chip red solid" title="they were written on the previous turn and were invalidated by the history rewrite">invalidated ${nf(A.broken)} tk</span>` : ''}
+     ${A.tailTokens > 0 ? `<span class="chip ${A.verdict === 'cauda' ? 'yellow solid' : 'yellow'}" title="prompt after the last marker: paid at full price every turn">tail ${nf(A.tailTokens)} tk</span>` : ''}
+     ${A.marksKnown ? `<span class="chip ${A.marksUsed > A.marksLimit ? 'red solid' : A.marksUsed ? '' : 'yellow'}">${A.marksUsed}/${A.marksLimit} breakpoints</span>` : '<span class="chip yellow">markers not recorded</span>'}
      ${u.cache_write ? `<span class="chip">TTL ${A.ttlSeconds === 3600 ? '1h' : '5min'}</span>` : ''}
-     ${A.gapSeconds != null ? `<span class="chip" title="intervalo desde o turno anterior desta conversa">gap ${dur(A.gapSeconds)}</span>` : ''}
-     ${A.hitRate != null ? `<span class="chip ${A.hitRate > 0.9 ? 'green' : A.hitRate > 0.5 ? 'yellow' : 'red'}" title="cache_read / (cache_read + cache_write + input)">aproveitamento ${(A.hitRate * 100).toFixed(1)}%</span>` : ''}`;
+     ${A.gapSeconds != null ? `<span class="chip" title="gap since the previous turn of this conversation">gap ${dur(A.gapSeconds)}</span>` : ''}
+     ${A.hitRate != null ? `<span class="chip ${A.hitRate > 0.9 ? 'green' : A.hitRate > 0.5 ? 'yellow' : 'red'}" title="cache_read / (cache_read + cache_write + input)">hit rate ${(A.hitRate * 100).toFixed(1)}%</span>` : ''}`;
 
   const foot = el('div', 'foot');
   foot.style.margin = '-6px 0 14px';
@@ -2308,12 +2333,12 @@ function cachePanel(t) {
   return wrap;
 }
 
-/** Mapa de breakpoints: duas faixas na mesma escala.
+/** Breakpoint map: two bands on the same scale.
  *
- *  Em cima, o prompt na ordem em que o provider monta o prefixo, com um ▲ em
- *  cada `cache_control`. Embaixo, os três baldes que ele cobrou. Onde as duas
- *  faixas discordam está o problema: se a fronteira do amarelo cai muito antes
- *  do último ▲, o marcador não está fazendo o trabalho que promete. */
+ *  On top, the prompt in the order the provider assembles the prefix, with a ▲ at
+ *  each `cache_control`. Below, the three buckets it billed. Where the two bands
+ *  disagree is where the problem is: if the yellow boundary falls well before the
+ *  last ▲, the marker is not doing the job it promises. */
 function breakpointMap(t) {
   const A = cacheAudit(t);
   const wrap = el('div', 'bpwrap');
@@ -2322,7 +2347,7 @@ function breakpointMap(t) {
   const pct = v => pctOf(v, A.promptTokens);
 
   wrap.append(el('div', 'bplabel',
-    `<span>marcadores no prompt · ordem do fio (${wireOrder(t._api).join(' → ')})</span>
+    `<span>markers in the prompt · wire order (${wireOrder(t._api).join(' → ')})</span>
      <span>${nf(A.promptTokens)} tk</span>`));
 
   const bar = el('div', 'bpmap');
@@ -2330,18 +2355,18 @@ function breakpointMap(t) {
     const w = pct(s.piece.tokens ?? 0);
     const who = `${s.label} #${s.piece.index}${s.piece.name ? ' · ' + s.piece.name : ''}`;
     return `<i style="width:${w}%;background:${s.color};opacity:${s.piece.cache ? 1 : .5}"
-      title="${esc(who)} · ${nf(s.piece.tokens)} tk · ${w.toFixed(1)}% do prompt${s.piece.cache ? ' · marcador aqui' : ''}"></i>`;
+      title="${esc(who)} · ${nf(s.piece.tokens)} tk · ${w.toFixed(1)}% of the prompt${s.piece.cache ? ' · marker here' : ''}"></i>`;
   }).join('') + A.marks.map(m =>
     `<b class="mark" style="left:${pct(m.prefixTokens)}%"
-       title="breakpoint em ${esc(m.label)} #${m.index} — cobre ${nf(m.prefixTokens)} tk (${pct(m.prefixTokens).toFixed(1)}% do prompt)"></b>`
+       title="breakpoint at ${esc(m.label)} #${m.index} — covers ${nf(m.prefixTokens)} tk (${pct(m.prefixTokens).toFixed(1)}% of the prompt)"></b>`
   ).join('');
   wrap.append(bar);
 
-  // A cobrança real, na mesma escala: até onde o provider leu do cache, o que
-  // ele gravou agora, e a cauda que sobrou fora de qualquer marcador.
+  // The actual billing, on the same scale: how far the provider read from the
+  // cache, what it wrote now, and the tail left outside every marker.
   wrap.append(el('div', 'bplabel',
-    `<span>como o provider cobrou</span>
-     <span>${A.afterLastMark > 0 && A.marks.length ? nf(A.afterLastMark) + ' tk depois do último ▲' : '—'}</span>`));
+    `<span>how the provider billed</span>
+     <span>${A.afterLastMark > 0 && A.marks.length ? nf(A.afterLastMark) + ' tk after the last ▲' : '—'}</span>`));
   const zones = el('div', 'bpmap');
   const z = [
     ['cache read', u.cache_read ?? 0, 'var(--cyan)'],
@@ -2349,30 +2374,30 @@ function breakpointMap(t) {
     ['input', u.input ?? 0, 'var(--red)'],
   ];
   zones.innerHTML = z.map(([label, v, c]) => v
-    ? `<i style="width:${pct(v)}%;background:${c}" title="${label}: ${nf(v)} tk (${pct(v).toFixed(1)}% do prompt)"></i>` : ''
+    ? `<i style="width:${pct(v)}%;background:${c}" title="${label}: ${nf(v)} tk (${pct(v).toFixed(1)}% of the prompt)"></i>` : ''
   ).join('');
   wrap.append(zones);
   wrap.append(el('div', 'legend', z.map(([label, v, c]) =>
     `<span><em style="background:${c}"></em>${label} <b>${nf(v)}</b></span>`).join('')));
 
   if (!A.marksKnown)
-    wrap.append(el('div', 'foot', 'Este log não registra onde estavam os marcadores de cache, '
-      + 'então a faixa de cima sai sem os ▲. A cobrança embaixo continua valendo.'));
+    wrap.append(el('div', 'foot', 'This log does not record where the cache markers were, '
+      + 'so the top band comes out without the ▲. The billing below still holds.'));
   else if (!A.marksUsed)
-    wrap.append(el('div', 'foot', 'Nenhum marcador de cache neste request: a faixa de cima não tem ▲ porque '
-      + 'não há o que marcar. Sem eles o provider cobra o prompt inteiro como input a cada turno, salvo o que '
-      + 'ele resolver cachear por conta própria.'));
+    wrap.append(el('div', 'foot', 'No cache marker in this request: the top band has no ▲ because there is '
+      + 'nothing to mark. Without them the provider bills the whole prompt as input every turn, apart from '
+      + 'whatever it decides to cache on its own.'));
   else if (A.marksUsed > A.marksLimit)
-    wrap.append(el('div', 'foot', `São ${A.marksUsed} marcadores num limite de ${A.marksLimit}: `
-      + 'a Anthropic ignora os excedentes, então os primeiros podem não estar valendo nada.'));
+    wrap.append(el('div', 'foot', `That is ${A.marksUsed} markers against a limit of ${A.marksLimit}: `
+      + 'Anthropic ignores the extras, so the first ones may be worth nothing.'));
   else if (A.marksUsed && A.marksUsed < A.marksLimit)
-    wrap.append(el('div', 'foot', `Sobra${A.marksLimit - A.marksUsed > 1 ? 'm' : ''} ${A.marksLimit - A.marksUsed} breakpoint${A.marksLimit - A.marksUsed > 1 ? 's' : ''} do limite de ${A.marksLimit}. `
-      + 'Um marcador extra logo ao fim das tools isola o bloco estável, para que uma mudança no fim do '
-      + 'system não obrigue a regravar os schemas junto.'));
+    wrap.append(el('div', 'foot', `${A.marksLimit - A.marksUsed} breakpoint${A.marksLimit - A.marksUsed > 1 ? 's are' : ' is'} still free out of the ${A.marksLimit} allowed. `
+      + 'One extra marker right at the end of the tools isolates the stable block, so a change at the end of '
+      + 'the system prompt does not force the schemas to be rewritten along with it.'));
   return wrap;
 }
 
-/* ---------- aba: composição do prompt ---------- */
+/* ---------- tab: prompt composition ---------- */
 function renderComposition(t) {
   const wrap = el('div');
   const comp = composition(t);
@@ -2383,25 +2408,25 @@ function renderComposition(t) {
   const head = el('div', 'metarow');
   head.innerHTML =
     `<span class="chip ${comp.measured ? 'green' : 'yellow'} solid">${
-       comp.measured ? 'tokens do provider, rateados por caracteres' : 'estimativa por caracteres'}</span>` +
+       comp.measured ? 'provider tokens, split by character count' : 'estimate from character count'}</span>` +
     (comp.cpt != null ? `<span class="chip">${comp.cpt} chars/token</span>` : '') +
-    `<span class="chip">${nf(comp.chars)} chars no prompt</span>` +
-    (u.prompt != null ? `<span class="chip accent">${nf(u.prompt)} tk cobrados no prompt</span>` : '');
+    `<span class="chip">${nf(comp.chars)} chars in the prompt</span>` +
+    (u.prompt != null ? `<span class="chip accent">${nf(u.prompt)} tk billed on the prompt</span>` : '');
   wrap.append(head);
   wrap.append(stackBar(comp), compLegend(comp));
   if (comp.measured && comp.cpt != null && (comp.cpt < 2 || comp.cpt > 8))
     wrap.append(el('div', 'notebox',
-      `<b>Proporção suspeita:</b> ${comp.cpt} caracteres por token está longe dos ~4 de texto comum. `
-      + 'Ou o prompt tem imagens/áudio, ou nem tudo que o provider cobrou estava no corpo da requisição — '
-      + 'o rateio por parte abaixo é indicativo, não exato.'));
+      `<b>Suspicious ratio:</b> ${comp.cpt} characters per token is far from the ~4 of ordinary text. `
+      + 'Either the prompt has images/audio, or not everything the provider billed was in the request body — '
+      + 'the per-part split below is indicative, not exact.'));
 
-  // ---- ferramentas, do mais caro para o mais barato
+  // ---- tools, priciest first
   const tools = groupOf(comp, 'tools');
   if (tools.pieces.length) {
-    wrap.append(el('h3', null, `Ferramentas · ${nf(tools.tokens)} tokens (${pctOf(tools.tokens, comp.total).toFixed(1)}% do prompt)`));
+    wrap.append(el('h3', null, `Tools · ${nf(tools.tokens)} tokens (${pctOf(tools.tokens, comp.total).toFixed(1)}% of the prompt)`));
     const tbl = el('table');
-    tbl.innerHTML = `<thead><tr><th>Ferramenta</th><th>Tokens</th><th>%</th><th style="width:22%"></th>
-      <th>Schema</th><th>Descrição</th></tr></thead>`;
+    tbl.innerHTML = `<thead><tr><th>Tool</th><th>Tokens</th><th>%</th><th style="width:22%"></th>
+      <th>Schema</th><th>Description</th></tr></thead>`;
     const tb = el('tbody');
     const max = Math.max(...tools.pieces.map(x => x.tokens ?? 0), 1);
     for (const x of [...tools.pieces].sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0))) {
@@ -2418,12 +2443,12 @@ function renderComposition(t) {
     wrap.append(card);
   }
 
-  // ---- blocos de system
+  // ---- system blocks
   const sys = groupOf(comp, 'system');
   if (sys.pieces.length) {
-    wrap.append(el('h3', null, `System · ${nf(sys.tokens)} tokens (${pctOf(sys.tokens, comp.total).toFixed(1)}% do prompt)`));
+    wrap.append(el('h3', null, `System · ${nf(sys.tokens)} tokens (${pctOf(sys.tokens, comp.total).toFixed(1)}% of the prompt)`));
     const tbl = el('table');
-    tbl.innerHTML = `<thead><tr><th>#</th><th>Tokens</th><th>%</th><th>Cache</th><th>Trecho</th></tr></thead>`;
+    tbl.innerHTML = `<thead><tr><th>#</th><th>Tokens</th><th>%</th><th>Cache</th><th>Excerpt</th></tr></thead>`;
     const tb = el('tbody');
     for (const x of sys.pieces)
       tb.innerHTML += `<tr><td class="k">[${x.index}]</td><td class="num">${nf(x.tokens)}</td>
@@ -2435,14 +2460,14 @@ function renderComposition(t) {
     wrap.append(card);
   }
 
-  // ---- mensagens, marcando onde o prefixo divergiu
+  // ---- messages, marking where the prefix diverged
   const msgs = groupOf(comp, 'messages');
   if (msgs.pieces.length) {
     const R = t.reuse;
-    wrap.append(el('h3', null, `Mensagens · ${nf(msgs.tokens)} tokens (${pctOf(msgs.tokens, comp.total).toFixed(1)}% do prompt)`));
+    wrap.append(el('h3', null, `Messages · ${nf(msgs.tokens)} tokens (${pctOf(msgs.tokens, comp.total).toFixed(1)}% of the prompt)`));
     const tbl = el('table');
-    tbl.innerHTML = `<thead><tr><th>#</th><th>Papel</th><th>Conteúdo</th><th>Tokens</th><th>%</th>
-      <th>Cache</th><th>Estado</th></tr></thead>`;
+    tbl.innerHTML = `<thead><tr><th>#</th><th>Role</th><th>Content</th><th>Tokens</th><th>%</th>
+      <th>Cache</th><th>State</th></tr></thead>`;
     const tb = el('tbody');
     for (const x of msgs.pieces) {
       const isNew = R && x.index >= R.stable_messages;
@@ -2451,43 +2476,43 @@ function renderComposition(t) {
         <td class="k">#${x.index}</td>
         <td style="color:${x.role === 'user' ? 'var(--cyan)' : 'var(--purple)'}">${esc(x.role ?? '—')}</td>
         <td style="color:var(--muted);font-family:var(--mono);font-size:11px">${esc((x.kinds ?? []).join(', '))}${
-          x.binary ? ' <span class="chip yellow">binário</span>' : ''}</td>
+          x.binary ? ' <span class="chip yellow">binary</span>' : ''}</td>
         <td class="num">${nf(x.tokens)}</td>
         <td class="num" style="color:var(--muted)">${pctOf(x.tokens, comp.total).toFixed(1)}%</td>
         <td>${x.cache ? `<span class="chip cyan solid">${esc(x.cache)}</span>` : '<span style="color:var(--faint)">—</span>'}</td>
-        <td>${broke ? '<span class="chip red solid">divergiu aqui</span>'
-            : isNew ? '<span class="chip green">nova</span>'
-            : R ? '<span class="chip" style="color:var(--faint)">reenviada</span>' : ''}</td></tr>`;
+        <td>${broke ? '<span class="chip red solid">diverged here</span>'
+            : isNew ? '<span class="chip green">new</span>'
+            : R ? '<span class="chip" style="color:var(--faint)">resent</span>' : ''}</td></tr>`;
     }
     tbl.append(tb);
     const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
     wrap.append(card);
   }
 
-  // ---- saída do modelo
+  // ---- model output
   if (t.reply?.tokens) {
     const k = t.reply.tokens; const ch = t.reply.chars ?? {};
-    wrap.append(el('h3', null, `Resposta · ${nf(k.output)} tokens de saída`));
+    wrap.append(el('h3', null, `Reply · ${nf(k.output)} output tokens`));
     const tbl = el('table');
-    tbl.innerHTML = `<thead><tr><th>Parte</th><th>Tokens</th><th>Chars</th></tr></thead>
+    tbl.innerHTML = `<thead><tr><th>Part</th><th>Tokens</th><th>Chars</th></tr></thead>
       <tbody>
-        <tr><td>Texto</td><td class="num">${nf(k.text)}</td><td class="num">${nf(ch.text)}</td></tr>
-        <tr><td>Raciocínio</td><td class="num">${nf(k.reasoning)}</td><td class="num">${nf(ch.reasoning)}</td></tr>
-        <tr><td>Chamadas de ferramenta</td><td class="num">${nf(k.tool_calls)}</td><td class="num">${nf(ch.tool_calls)}</td></tr>
+        <tr><td>Text</td><td class="num">${nf(k.text)}</td><td class="num">${nf(ch.text)}</td></tr>
+        <tr><td>Reasoning</td><td class="num">${nf(k.reasoning)}</td><td class="num">${nf(ch.reasoning)}</td></tr>
+        <tr><td>Tool calls</td><td class="num">${nf(k.tool_calls)}</td><td class="num">${nf(ch.tool_calls)}</td></tr>
       </tbody>`;
     const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
     wrap.append(card);
     if (k.source && !String(k.source).startsWith('provider'))
-      wrap.append(el('div', 'foot', 'Saída estimada por caracteres: o provider não reportou a contagem neste turno.'));
+      wrap.append(el('div', 'foot', 'Output estimated from character count: the provider reported no count on this turn.'));
   }
   return wrap;
 }
 
-/* ---------- aba: request ---------- */
+/* ---------- tab: request ---------- */
 function renderRequest(t) {
   const wrap = el('div'); const rq = t.request ?? {}; const b = rq.body ?? {};
   const res = t.response ?? {};
-  const kv = (obj, title) => {                 // omite chaves ausentes; some se ficar vazio
+  const kv = (obj, title) => {                 // drops absent keys; disappears if left empty
     const rows = Object.entries(obj ?? {}).filter(([, v]) => v != null && v !== '');
     if (!rows.length) return null;
     const card = el('div', 'card');
@@ -2500,9 +2525,9 @@ function renderRequest(t) {
   const add = c => { if (c) wrap.append(c); };
   add(kv({ method: rq.method, url: rq.url, status: res.status, bytes: res.bytes,
     message_id: res.id, session: t.session,
-    started_at: t.started_at ? fmtTime(t.started_at) + (t._approxTime ? '  (mtime do arquivo, aproximado)' : '') : null,
+    started_at: t.started_at ? fmtTime(t.started_at) + (t._approxTime ? '  (file mtime, approximate)' : '') : null,
     elapsed_seconds: t.elapsed_seconds, stop_reason: res.stop_reason,
-    service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Requisição / resposta'));
+    service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Request / response'));
   const cx = ctxStats(t);
   add(kv({ api: apiLabel(t._api), agent: t.agent,
     model: b.model, max_tokens: b.max_tokens ?? b.max_output_tokens, stream: b.stream,
@@ -2510,27 +2535,27 @@ function renderRequest(t) {
     reasoning: b.reasoning ? `effort ${b.reasoning.effort ?? '—'} · summary ${b.reasoning.summary ?? '—'}` : null,
     temperature: b.temperature, top_p: b.top_p,
     tool_choice: b.tool_choice == null ? null : (typeof b.tool_choice === 'string' ? b.tool_choice : JSON.stringify(b.tool_choice)),
-    store: b.store, mensagens: cx.messages.length, ferramentas: cx.tools.length }, 'Parâmetros'));
-  add(kv(rq.headers, 'Headers da requisição'));
-  add(kv(res.headers, 'Headers da resposta'));
+    store: b.store, messages: cx.messages.length, tools: cx.tools.length }, 'Parameters'));
+  add(kv(rq.headers, 'Request headers'));
+  add(kv(res.headers, 'Response headers'));
   const u = t.usage ?? {};
   add(kv({
-    origem: u.source === 'provider' ? 'contagem do provider (exata)'
-          : u.source === 'estimated' ? 'estimada pelo plugin: o provider não reportou nada'
+    source: u.source === 'provider' ? 'provider count (exact)'
+          : u.source === 'estimated' ? 'estimated by the plugin: the provider reported nothing'
           : null,
     input: u.input, cache_read: u.cache_read, cache_write: u.cache_write,
     prompt: u.prompt, output: u.output, reasoning: u.reasoning, total: u.total,
     cache_hit_rate: t.cache_hit_rate != null ? (t.cache_hit_rate * 100).toFixed(2) + '%' : null,
     ...(res.cache_5m != null ? { cache_write_5m: res.cache_5m, cache_write_1h: res.cache_1h } : {}),
   }, 'Usage'));
-  // Contadores que só alguns provedores mandam, e o total como *eles* somam —
-  // guardado para conferência, não somado ao nosso.
-  add(kv(u.details, 'Usage · detalhes do provider'));
-  add(kv(t.prompt?.settings, 'Parâmetros de amostragem (como foram no corpo)'));
+  // Counters only some providers send, and the total as *they* add it up — kept
+  // for cross-checking, not folded into ours.
+  add(kv(u.details, 'Usage · provider details'));
+  add(kv(t.prompt?.settings, 'Sampling parameters (as they went in the body)'));
   return wrap;
 }
 
-/* ---------- aba: system + tools ---------- */
+/* ---------- tab: system + tools ---------- */
 function renderSystem(t) {
   const wrap = el('div'); const c = ctxStats(t);
   c.sys.forEach((b, i) => {
@@ -2543,9 +2568,9 @@ function renderSystem(t) {
     body.append(preBody(md(b.text || ''), false, true, false, MD_RE.test(b.text || '') ? b.text : null));
     d.append(body); wrap.append(d);
   });
-  if (!c.tools.length) { wrap.append(el('div', 'empty', 'Nenhuma ferramenta enviada neste turno.')); return wrap; }
+  if (!c.tools.length) { wrap.append(el('div', 'empty', 'No tools sent on this turn.')); return wrap; }
   const head = el('div', 'card'); head.append(el('div', 'chead',
-    `<b>Ferramentas disponíveis</b><span style="flex:1"></span><span class="chip">${c.tools.length}</span><span class="chip">${nf(c.toolChars)} chars</span>`));
+    `<b>Available tools</b><span style="flex:1"></span><span class="chip">${c.tools.length}</span><span class="chip">${nf(c.toolChars)} chars</span>`));
   wrap.append(head);
   for (const tool of c.tools) {
     const d = el('details', 'card');
@@ -2561,14 +2586,14 @@ function renderSystem(t) {
   return wrap;
 }
 
-/* ---------- aba: stream ---------- */
+/* ---------- tab: stream ---------- */
 function renderStream(t) {
   const wrap = el('div');
   const events = t.response?.events ?? [];
   const bar = el('div', 'card'); bar.style.padding = '10px 13px';
   bar.innerHTML = `<label style="font-size:12.5px;cursor:pointer">
-    <input type="checkbox" id="grp" ${S.groupDeltas ? 'checked' : ''}> agrupar deltas consecutivos por bloco</label>
-    <span class="chip" style="float:right">${events.length} eventos</span>`;
+    <input type="checkbox" id="grp" ${S.groupDeltas ? 'checked' : ''}> group consecutive deltas by block</label>
+    <span class="chip" style="float:right">${events.length} events</span>`;
   wrap.append(bar);
   bar.querySelector('#grp').onchange = e => { S.groupDeltas = e.target.checked; render(); };
 
@@ -2601,7 +2626,7 @@ function evRow(i, type, detail, cls) {
   return r;
 }
 
-/** Nome e classe do evento (Anthropic tem `type`; chunks OpenAI não). */
+/** The event's name and class (Anthropic has `type`; OpenAI chunks do not). */
 const evType = e => e.type ?? e.object ?? 'chat.completion.chunk';
 function evCls(e) {
   const t = evType(e);
@@ -2612,7 +2637,7 @@ function evCls(e) {
   return t;
 }
 
-/** Descreve um evento de delta agrupável (ou null se não for um). */
+/** Describes a groupable delta event (or null if it is not one). */
 function deltaInfo(e) {
   if (e.type === 'content_block_delta') {
     const d = e.delta ?? {};
@@ -2686,9 +2711,9 @@ function evSummary(e) {
   }
 }
 
-/* ---------- aba: json bruto ---------- */
-/** O arquivo do turno inteiro, como está no disco. Nada de recortes: o
- *  request, a resposta e os eventos já estão todos aqui dentro. */
+/* ---------- tab: raw json ---------- */
+/** The whole turn file, as it sits on disk. No excerpts: the request, the reply
+ *  and the events are all already in here. */
 function renderRaw(t) {
   const card = el('div', 'card');
   const body = el('div', 'cbody');
@@ -2699,7 +2724,7 @@ function renderRaw(t) {
 }
 
 /* =========================================================================
-   Formatação de texto
+   Text formatting
    ========================================================================= */
 function jsonHTML(obj) {
   const s = esc(JSON.stringify(obj, null, 2));
@@ -2711,20 +2736,20 @@ function jsonHTML(obj) {
     .replace(/:\s(null)/g, ': <span class="j-null">$1</span>');
 }
 
-/** Marcas que valem um preview. Serve para decidir se o botão "ver fonte"
- *  aparece: em texto sem markdown nenhum ele não teria o que mostrar. */
+/** Markup worth a preview. It decides whether the "view source" button shows up:
+ *  on text with no markdown at all it would have nothing to show. */
 const MD_RE = /```|`[^`\n]+`|\*\*\S|~~\S|\[[^\]\n]+\]\(|(^|\n)[ \t]*(#{1,6} |[-*+] |\d+[.)] |> |---)/;
 
-/** Markdown suficiente para ler a saída de um agente: blocos de código, listas,
- *  títulos, citações, links e ênfase.
+/** Enough markdown to read an agent's output: code blocks, lists, headings,
+ *  quotes, links and emphasis.
  *
- *  Isto é preview, não a fonte — o texto exato que trafegou continua a um clique
- *  no botão "ver fonte", que é o que importa numa auditoria.
+ *  This is a preview, not the source — the exact text that went over the wire is
+ *  still one click away under "view source", which is what matters in an audit.
  *
- *  Os blocos de código saem de cena antes de tudo e voltam no fim: sem isso um
- *  `**` dentro de um exemplo de código viraria negrito. `_` e `__` não marcam
- *  ênfase aqui de propósito — estes logs são cheios de nomes como
- *  `cache_read_input_tokens`, que ficariam picotados. */
+ *  Code blocks leave the stage first and come back last: without that a `**`
+ *  inside a code example would turn into bold. `_` and `__` deliberately do not
+ *  mark emphasis here — these logs are full of names like
+ *  `cache_read_input_tokens`, which would end up chopped to pieces. */
 function md(raw) {
   const fences = [], codes = [];
   let s = String(raw ?? '').replace(/```(\w*)\r?\n([\s\S]*?)```/g, (_, lang, code) => {
@@ -2734,15 +2759,15 @@ function md(raw) {
   s = esc(s);
   s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(`<code>${c}</code>`); return `\u0000C${codes.length - 1}\u0000`; });
 
-  // trechos: link antes de ênfase, para o texto do link poder ser negrito
+  // inline: links before emphasis, so link text can be bold
   s = s.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (_, txt, href) =>
     /^(https?:\/\/|mailto:)/i.test(href) ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">${txt}</a>` : txt);
   s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/\*(?=\S)([^*\n]*?\S)\*/g, '<em>$1</em>');
   s = s.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>');
 
-  // linhas: o container é pre-wrap, então os blocos são emendados sem \n
-  // em volta — senão cada lista abriria uma linha em branco.
+  // block level: the container is pre-wrap, so the blocks are spliced in with no
+  // \n around them — otherwise every list would open a blank line.
   const lines = s.split(/\r?\n/);
   let html = '', list = null, items = [];
   const flush = () => { if (list) { html += `<${list}>${items.join('')}</${list}>`; items = []; list = null; } };
@@ -2776,10 +2801,10 @@ function md(raw) {
   return highlight(html);
 }
 
-/** Tabela no estilo GFM a partir da linha `i`: cabeçalho, linha de alinhamento e
- *  o corpo até a primeira linha sem `|`. Devolve null quando não é tabela, e o
- *  índice da última linha consumida quando é. Sem isto uma comparação de preços
- *  — que é metade do que um modelo escreve — chega como um muro de pipes. */
+/** A GFM-style table starting at line `i`: header, alignment row, and the body up
+ *  to the first line without a `|`. Returns null when it is not a table, and the
+ *  index of the last line consumed when it is. Without this a price comparison —
+ *  which is half of what a model writes — arrives as a wall of pipes. */
 function mdTable(lines, i) {
   const head = lines[i], sep = lines[i + 1];
   if (!head || !head.includes('|') || !sep) return null;
@@ -2791,7 +2816,7 @@ function mdTable(lines, i) {
     c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : '');
   const at = j => align[j] ? ` style="text-align:${align[j]}"` : '';
   let end = i + 1, body = '';
-  // Uma linha em branco, ou sem pipe nenhum, encerra a tabela.
+  // A blank line, or one with no pipe at all, ends the table.
   while (end + 1 < lines.length && lines[end + 1].trim() && lines[end + 1].includes('|')) {
     const r = cells(lines[++end]);
     body += '<tr>' + cols.map((_, j) => `<td${at(j)}>${r[j] ?? ''}</td>`).join('') + '</tr>';
@@ -2803,7 +2828,7 @@ function mdTable(lines, i) {
   };
 }
 
-/** Destaca o termo de busca (não quebra tags). */
+/** Highlights the search term (without breaking tags). */
 function highlight(html) {
   if (!S.q) return html;
   const re = new RegExp('(' + S.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
@@ -2812,7 +2837,7 @@ function highlight(html) {
 }
 
 /* =========================================================================
-   Controles
+   Controls
    ========================================================================= */
 let qt;
 $('#search').oninput = e => { clearTimeout(qt); qt = setTimeout(() => { S.q = e.target.value.trim(); render(); }, 180); };
