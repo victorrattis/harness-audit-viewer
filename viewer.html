@@ -376,25 +376,23 @@ function copilotPrice(model, promptTokens) {
   return row.limit ? (promptTokens > row.limit ? row.high : row.low) : row;
 }
 
-/** Quanto o turno custou, em dólares. `null` quando não há o que cobrar: não é
- *  Copilot, o provider não contou os tokens, ou o modelo não tem preço. */
-function copilotCost(t) {
+/** A tabela de créditos do Copilot lida como as tarifas do turno: em dólares por
+ *  1M de tokens, com os mesmos quatro nomes que o plugin grava. `null` quando o
+ *  turno não é do Copilot ou o modelo não está na tabela. */
+function copilotRates(t) {
   if (!isCopilot(t)) return null;
-  const u = t.usage; if (!u) return null;
+  const u = t.usage ?? {};
   const prompt = (u.input ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0);
   const p = copilotPrice(t.model, prompt); if (!p) return null;
-  // `reasoning` não entra somado: ele já está dentro de `output`, e somar de
-  // novo cobraria o raciocínio duas vezes.
-  const cr = (u.input ?? 0) * p.in
-           + (u.cache_read ?? 0) * p.cached
-           + (u.cache_write ?? 0) * (p.write ?? p.in)
-           + (u.output ?? 0) * p.out;
-  return cr / 1e6 * CREDIT_USD;
+  return {
+    input: p.in * CREDIT_USD,
+    cache_read: p.cached * CREDIT_USD,
+    // `write: null` na tabela é a linha em que o cache write não é item próprio:
+    // os tokens gravados são cobrados como input.
+    cache_write: (p.write ?? p.in) * CREDIT_USD,
+    output: p.out * CREDIT_USD,
+  };
 }
-
-/** Turno do Copilot que ficou de fora da conta por falta de preço. Sem `usage`
- *  não conta como sem preço: ali não havia tokens para cobrar. */
-const semPreco = t => isCopilot(t) && !!t.usage && !t.rates_per_million && copilotPrice(t.model, 0) == null;
 
 /* =========================================================================
    Custo do turno
@@ -413,25 +411,74 @@ const semPreco = t => isCopilot(t) && !!t.usage && !t.rates_per_million && copil
  *
  *  Sem nenhuma das duas o turno não entra na conta, e a tela diz quais ficaram
  *  de fora — um total incompleto que se apresenta como completo é pior que
- *  total nenhum. */
-function custo(t) {
-  const u = t.usage; if (!u) return null;
-  const r = t.rates_per_million;
-  if (r) {
-    // `reasoning` não entra somado: já está dentro de `output`.
-    return ((u.input ?? 0) * (r.input ?? 0)
-          + (u.cache_read ?? 0) * (r.cache_read ?? 0)
-          + (u.cache_write ?? 0) * (r.cache_write ?? r.input ?? 0)
-          + (u.output ?? 0) * (r.output ?? 0)) / 1e6;
-  }
-  return copilotCost(t);
+ *  total nenhum.
+ *
+ *  As duas se misturam por componente, e não em bloco. O catálogo chega ao
+ *  plugin já com os buracos preenchidos por zero (`cache_write ?? 0` lá dentro),
+ *  então uma tarifa ausente e uma tarifa gratuita chegam aqui idênticas — e a
+ *  primeira, tomada por zero, apaga da fatura o balde inteiro. Foi o que
+ *  aconteceu com `cache_write` do claude-sonnet-5 no Copilot: meio milhão de
+ *  tokens a US$ 2,50/1M saindo de graça, quase metade da conta. A regra que
+ *  desfaz o empate é o próprio turno: tarifa zerada com token daquele tipo para
+ *  cobrar é dado que faltou, não preço. */
+const RATE_FIELDS = ['input', 'cache_read', 'cache_write', 'output'];
+
+/** As quatro tarifas do turno em dólares por 1M, com a origem de cada uma.
+ *  `furos` são os componentes que o catálogo não trouxe e outra fonte cobriu:
+ *  eles entram no total, mas a tela precisa dizer que entraram estimados. */
+function tarifas(t) {
+  if ('_tarifas' in t) return t._tarifas;
+  const out = calcTarifas(t);
+  Object.defineProperty(t, '_tarifas', { value: out, enumerable: false });
+  return out;
 }
 
-/** De onde saiu o custo desta sessão, para a tela poder nomear a moeda. */
+function calcTarifas(t) {
+  const u = t.usage; if (!u) return null;
+  const r = t.rates_per_million;
+  const cred = copilotRates(t);
+  if (!r && !cred) return null;
+  const rates = {}, furos = [];
+  for (const f of RATE_FIELDS) {
+    const v = r?.[f];
+    // Tarifa boa: veio um número maior que zero, ou veio zero e não há token
+    // desse tipo neste turno — zero sem o que cobrar não muda nada.
+    if (v > 0 || (v === 0 && !(u[f] ?? 0))) { rates[f] = v; continue; }
+    // Buraco. A tabela de créditos primeiro, porque no Copilot é ela que diz o
+    // que sai do pacote; depois a tarifa de input, que é o piso do cache write
+    // em todo provedor que cobra por ele.
+    const alt = cred?.[f] ?? (f === 'cache_write' ? (r?.input || cred?.input) : null);
+    if (alt > 0) { rates[f] = alt; furos.push(f); }
+    else rates[f] = v ?? 0;
+  }
+  return { rates, furos, base: r ? 'catálogo do opencode' : 'créditos do Copilot' };
+}
+
+function custo(t) {
+  const x = tarifas(t); if (!x) return null;
+  const u = t.usage, r = x.rates;
+  // `reasoning` não entra somado: já está dentro de `output`.
+  return ((u.input ?? 0) * r.input
+        + (u.cache_read ?? 0) * r.cache_read
+        + (u.cache_write ?? 0) * r.cache_write
+        + (u.output ?? 0) * r.output) / 1e6;
+}
+
+/** Turno com tokens que ficou de fora da conta por não haver tarifa nenhuma.
+ *  Vale para qualquer provedor: antes só o Copilot era conferido, e um turno de
+ *  outro provedor sem tarifa gravada sumia do total sem aviso — foi assim que a
+ *  chamada de título saiu da fatura calada. */
+const semPreco = t => !!t.usage?.total && tarifas(t) == null;
+
+/** Componentes que este turno pagou com tarifa emprestada. */
+const furosDe = t => tarifas(t)?.furos ?? [];
+
+/** De onde saiu o custo desta sessão, para a tela poder nomear a moeda. Quando
+ *  as duas fontes aparecem na mesma sessão o nome diz as duas: somar revenda com
+ *  tarifa de lista dá um número que não é nenhuma das duas coisas. */
 function fonteCusto(turns) {
-  if (turns.some(t => t.rates_per_million && t.usage)) return 'catálogo do opencode';
-  if (turns.some(t => isCopilot(t) && t.usage)) return 'créditos do Copilot';
-  return null;
+  const fs = [...new Set(turns.map(t => tarifas(t)?.base).filter(Boolean))];
+  return fs.length ? fs.join(' + ') : null;
 }
 
 /* Os dois diários que o plugin mantém ao lado dos turnos. */
@@ -1386,8 +1433,16 @@ function sessionTotals(s) {
     resent_tokens: comReuso.length ? comReuso.reduce((a, t) => a + (t.reuse.resent_tokens ?? 0), 0) : null,
     cache_lost: audits.reduce((a, x) => a + x.lost, 0),
     cache_broken: audits.reduce((a, x) => a + x.broken, 0),
-    cache_tail_avg: audits.length ? audits.reduce((a, x) => a + x.tailTokens, 0) / audits.length : 0,
+    // A média é por turno que tinha cauda a medir: um turno sem contagem entra
+    // com zero e puxaria a média para baixo por falta de dado, não por mérito.
+    cache_tail_avg: (() => {
+      const cont = s.turns.filter(t => t.usage?.total).length;
+      return cont ? audits.reduce((a, x) => a + x.tailTokens, 0) / cont : 0;
+    })(),
     cache_ok: julgados.length ? julgados.filter(a => a.verdict === 'ok').length / julgados.length : null,
+    // O denominador do KPI acima. Sem ele, "100%" ao lado de uma barra que
+    // mostra cinco turnos fora do verde parece contradição, e não recorte.
+    cache_julgados: julgados.length,
     cache_verdicts: audits.reduce((a, x) => (a[x.verdict] = (a[x.verdict] ?? 0) + 1, a), {}),
     incomplete: s.turns.filter(t => t.incomplete).length || null,
     by_model: buckets(s.turns, t => `${t.provider ?? '?'}/${t.model ?? '?'}`),
@@ -1411,6 +1466,10 @@ function sessionTotals(s) {
     // Os modelos que ficaram fora da soma, para o total não passar por completo.
     copilot_sem_preco: [...new Set(s.turns.filter(semPreco).map(t => t.model))],
     copilot_sem_preco_turnos: s.turns.filter(semPreco).length,
+    // Tarifa que o catálogo não trouxe e outra fonte cobriu. O total continua
+    // sendo o melhor número disponível, mas deixa de se apresentar como exato.
+    custo_furos: [...new Set(s.turns.flatMap(furosDe))],
+    custo_furos_turnos: s.turns.filter(t => furosDe(t).length).length,
     // Turnos que repetiram um prompt já recusado: token pago duas vezes.
     retries: s.turns.filter(t => t.retry_of != null).length || null,
     retry_tokens: s.turns.filter(t => t.retry_of != null).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
@@ -1688,14 +1747,17 @@ function renderOverview() {
   // A fatura do Copilot é em créditos; o dólar é a leitura, o crédito é o que
   // sai do pacote do plano — então lá o KPI mostra um e conta o outro no title.
   // Com tarifa do catálogo o dólar já é o número, e não há crédito a converter.
-  const emCreditos = tot2.fonte_custo === 'créditos do Copilot';
+  const emCreditos = (tot2.fonte_custo ?? '').includes('créditos do Copilot');
+  const ressalvas = tot2.copilot_sem_preco.length || tot2.custo_furos.length;
   const custoKpi = tot2.copilot_cost != null
     ? `<div class="kpi" title="${emCreditos
           ? (tot2.copilot_cost / CREDIT_USD).toFixed(1).replace('.', ',') + ' créditos'
           : 'tarifa do catálogo do opencode, gravada em cada turno'}${
         tot2.copilot_sem_preco.length ? ` · ${tot2.copilot_sem_preco_turnos} turno(s) fora da conta` : ''
+      }${
+        tot2.custo_furos.length ? ` · ${tot2.custo_furos_turnos} turno(s) com tarifa emprestada` : ''
       }"><b style="color:var(--green)">${money(tot2.copilot_cost)}</b><span>Custo (${esc(tot2.fonte_custo ?? '—')})${
-        tot2.copilot_sem_preco.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
+        ressalvas ? '<span style="color:var(--yellow)"> *</span>' : ''}</span></div>`
     : '';
 
   wrap.append(el('div', 'grid2',
@@ -1707,7 +1769,8 @@ function renderOverview() {
     K(cacheRate.toFixed(1) + '%', 'Aproveitamento de cache',
       cacheRate > 90 ? 'var(--green)' : cacheRate > 50 ? 'var(--yellow)' : 'var(--red)') +
     (tot2.cache_ok != null
-      ? K((tot2.cache_ok * 100).toFixed(0) + '%', 'Turnos com cache ok',
+      ? K((tot2.cache_ok * 100).toFixed(0) + '%',
+          `Turnos com cache ok (${nf(tot2.cache_julgados)} de ${nf(tot2.turns)} julgados)`,
           tot2.cache_ok > 0.9 ? 'var(--green)' : tot2.cache_ok > 0.6 ? 'var(--yellow)' : 'var(--red)') : '') +
     // O que estava em cache, continuava válido, e mesmo assim foi cobrado de
     // novo: o custo direto das falhas de cache.
@@ -1747,6 +1810,14 @@ function renderOverview() {
     wrap.append(el('div', 'foot', '* fora do custo: '
       + tot2.copilot_sem_preco.map(m => esc(m)).join(', ')
       + ` — sem tarifa gravada no turno nem preço na tabela de créditos do Copilot (${tot2.copilot_sem_preco_turnos} turno(s)).`));
+  // Tarifa que o catálogo entregou zerada tendo token daquele tipo para cobrar.
+  // Zero ali quase nunca é preço: é campo que o catálogo não preencheu, e sem
+  // este aviso o balde inteiro sairia de graça sem ninguém notar.
+  if (tot2.custo_furos.length)
+    wrap.append(el('div', 'foot', '* tarifa emprestada em '
+      + tot2.custo_furos.map(f => esc(f)).join(', ')
+      + `: o catálogo gravou zero no turno tendo token desse tipo a cobrar, e a conta usou a tabela de créditos do Copilot`
+      + ` (ou, na falta dela, a tarifa de input) em ${tot2.custo_furos_turnos} turno(s).`));
 
   // Distribuição dos vereditos: onde a lógica de cache acerta e onde escapa.
   const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
