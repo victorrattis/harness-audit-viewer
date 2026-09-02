@@ -42,6 +42,9 @@ header input:focus,header select:focus,.scopebar select:focus{border-color:var(-
 header .grow{flex:1}
 .btn{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn[disabled]{opacity:.55}
+.btn.spin{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 #main{display:grid;grid-template-columns:290px 1fr;min-height:0}
 #side{background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;min-height:0}
@@ -260,6 +263,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
     <select id="sessionSel" title="Session"></select>
     <input id="search" type="search" placeholder="Search inside the turns…" style="width:280px">
     <div class="grow"></div>
+    <button class="btn" id="refreshBtn" title="Reload the logs from disk (r)">⟳</button>
     <button class="btn" id="themeBtn" title="Toggle theme">◐</button>
     <button class="btn" id="loadBtn">Open folder…</button>
   </header>
@@ -288,6 +292,10 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
    State
    ========================================================================= */
 const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupDeltas: true,
+            // How to re-read the folder that is open, for the refresh button.
+            // `null` means the source is a snapshot (a picked folder) and only a
+            // new pick brings the new turns in.
+            reload: null,
             // Scope of the sidebar list: 'all', 'root' (the main conversation only) or the
             // id of a subagent; `collapsed` holds the folded groups.
             scope: 'all', collapsed: new Set() };
@@ -698,7 +706,7 @@ function hydrate(value, store) {
   return out;
 }
 
-function ingest(files) {                       // files: [{path, text, mtime}]
+function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
   const map = new Map();
   const stores = new Map();                    // session -> Map(hash, piece)
   const crus = [];                             // turns, hydrated on the 2nd pass
@@ -753,10 +761,27 @@ function ingest(files) {                       // files: [{path, text, mtime}]
   const sessions = [...map.values()].filter(s => s.turns.length);
   sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
   sessions.sort((a, b) => b.id.localeCompare(a.id));
-  if (!sessions.length) { alert('No valid log found in that folder.'); return; }
-  S.sessions = sessions; S.sid = sessions[0].id; S.sel = 'overview';
+  if (!sessions.length) {
+    if (!opts.keep) alert('No valid log found in that folder.');
+    return false;
+  }
+  // On a refresh the reading position is the whole point: the session, the turn,
+  // the tab and the scroll stay where they were, so the new turns just show up.
+  const prev = opts.keep
+    ? { sid: S.sid, sel: S.sel, tab: S.tab, scope: S.scope, collapsed: S.collapsed,
+        side: $('#side').scrollTop, content: $('#content').scrollTop }
+    : null;
+  S.sessions = sessions;
+  if (prev && sessions.some(s => s.id === prev.sid)) {
+    S.sid = prev.sid; S.tab = prev.tab; S.scope = prev.scope; S.collapsed = prev.collapsed;
+    S.sel = prev.sel === 'overview' || turns().some(t => t.turn === prev.sel) ? prev.sel : 'overview';
+  } else {
+    S.sid = sessions[0].id; S.sel = 'overview';
+  }
   $('#drop').hidden = true; $('#app').hidden = false;
   renderSessionSelect(); render();
+  if (prev) { $('#side').scrollTop = prev.side; $('#content').scrollTop = prev.content; }
+  return true;
 }
 
 /** What is worth reading from a log folder: the turns, their piece store, and
@@ -783,30 +808,36 @@ const dz = $('#drop');
 ['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
 dz.addEventListener('drop', async e => {
   const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
-  const out = [];
-  for (const en of entries) await readEntry(en, out, '');
-  ingest(out);
+  // The directory entries stay readable while the page lives: keeping them is
+  // what lets the refresh button re-walk the folder without asking again.
+  const read = async () => {
+    const out = [];
+    for (const en of entries) await readEntry(en, out, '');
+    return out;
+  };
+  S.reload = read;
+  ingest(await read());
 });
 $('#pickBtn').onclick = $('#loadBtn').onclick = () => $('#fileInput').click();
 $('#fileInput').onchange = async e => {
   const out = [];
   for (const f of e.target.files) if (queremos(f.name)) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
+  S.reload = null;                             // <input> hands over a snapshot; refresh re-opens the picker
   ingest(out);
 };
 
-// auto-load when served over http
-(async function auto() {
-  if (!location.protocol.startsWith('http')) return;
-  let files = null;
+// Reads the whole tree over http. `no-store` everywhere: a refresh that reads
+// the browser cache would show the same turns as before.
+async function collectHttp() {
   const out = [];
   const enc = p => p.split('/').map(encodeURIComponent).join('/');
   async function walk(dir, depth) {             // walks up to 4 levels (base/<run>/<session>/)
     if (depth > 4) return;
-    const idx = await (await fetch('./' + enc(dir))).text();
+    const idx = await (await fetch('./' + enc(dir), { cache: 'no-store' })).text();
     for (const m of idx.matchAll(/href="([^"?/]+\.jsonl?)"/g)) {
       const fn = decodeURIComponent(m[1]);
       if (!queremos(fn)) continue;
-      const r = await fetch('./' + enc(dir + fn));
+      const r = await fetch('./' + enc(dir + fn), { cache: 'no-store' });
       const lm = r.headers.get('last-modified');
       out.push({ path: dir + fn, text: await r.text(), mtime: lm ? Date.parse(lm) : null });
     }
@@ -816,10 +847,36 @@ $('#fileInput').onchange = async e => {
       await walk(dir + d + '/', depth + 1);
     }
   }
-  try { await walk('', 1); if (out.length) files = out; }
+  await walk('', 1);
+  return out;
+}
+
+// auto-load when served over http
+(async function auto() {
+  if (!location.protocol.startsWith('http')) return;
+  let files = null;
+  try { files = await collectHttp(); }
   catch (e) { console.warn('auto-load unavailable:', e); return; }
-  if (files) ingest(files);
+  if (files.length) { S.reload = collectHttp; ingest(files); }
 })();
+
+/** Re-reads the open folder and redraws without losing the reading position. */
+async function refresh() {
+  const btn = $('#refreshBtn');
+  if (!S.reload) { $('#fileInput').click(); return; }   // snapshot source: ask for the folder again
+  btn.disabled = true; btn.classList.add('spin');
+  try {
+    const files = await S.reload();
+    if (files.length) ingest(files, { keep: true });
+  } catch (e) {
+    console.warn('refresh failed:', e);
+    S.reload = null;
+    alert('Could not re-read the folder. Open it again to keep following it.');
+  } finally {
+    btn.disabled = false; btn.classList.remove('spin');
+  }
+}
+$('#refreshBtn').onclick = refresh;
 
 /* =========================================================================
    Turn-reading helpers
@@ -2867,6 +2924,7 @@ document.addEventListener('keydown', e => {
   const at = list.indexOf(S.sel);
   if (e.key === 'j' || e.key === 'ArrowDown') { S.sel = list[Math.min(at + 1, list.length - 1)] ?? list[0]; render(); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { if (at > 0) { S.sel = list[at - 1]; render(); } else { S.sel = 'overview'; render(); } }
+  else if (e.key === 'r') { e.preventDefault(); refresh(); }
   else if (e.key === '/') { e.preventDefault(); $('#search').focus(); }
   else if (['1','2','3','4','5','6'].includes(e.key)) { S.tab = ['conv','comp','req','sys','stream','json'][+e.key - 1]; render(); }
 });
