@@ -287,7 +287,8 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
     <button class="btn" id="pickBtn" style="padding:9px 18px">Select folder…</button>
     <input type="file" id="fileInput" webkitdirectory directory multiple hidden>
     <div class="hint">
-      Everything runs locally in the browser — no data leaves the machine.<br>
+      Everything runs locally in the browser — no data leaves the machine.
+      Once the folder is open, <b>⟳</b> re-reads it — new turns included — without asking again.<br>
       Alternative: <code>python3 -m http.server 8000</code> in the folder, then open
       <code>localhost:8000/viewer.html</code> (it loads by itself).<br>Formats: OpenCode (SSE stream) and harness-audit (final response).
     </div>
@@ -810,26 +811,65 @@ async function readEntry(entry, out, base) {
   }
 }
 
+/** Walks a directory handle from the File System Access API.
+ *
+ *  A handle is not a copy of the files: it stays readable for as long as the page
+ *  lives, so every refresh re-reads the folder — turns written since included —
+ *  without picking anything or confirming an upload again. */
+async function walkHandle(dir, base = '', depth = 1, out = []) {
+  if (depth > 5) return out;                   // base/<run>/<session>/, with room to spare
+  for await (const h of dir.values()) {
+    if (h.name.startsWith('.') || h.name === 'node_modules') continue;
+    if (h.kind === 'directory') { await walkHandle(h, base + h.name + '/', depth + 1, out); continue; }
+    if (!queremos(h.name)) continue;
+    const f = await h.getFile();
+    out.push({ path: base + h.name, text: await f.text(), mtime: f.lastModified });
+  }
+  return out;
+}
+
 const dz = $('#drop');
 ['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('over'); }));
 ['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('over'); }));
 dz.addEventListener('drop', async e => {
-  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
-  // The directory entries stay readable while the page lives: keeping them is
-  // what lets the refresh button re-walk the folder without asking again.
-  const read = async () => {
-    const out = [];
-    for (const en of entries) await readEntry(en, out, '');
-    return out;
-  };
+  // Both readings have to be taken before the first await: the items of a drop
+  // are emptied as soon as the handler yields.
+  const items = [...e.dataTransfer.items];
+  const pedidas = items.map(i => i.getAsFileSystemHandle?.() ?? Promise.resolve(null));
+  const entries = items.map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const handles = (await Promise.all(pedidas.map(p => Promise.resolve(p).catch(() => null))))
+    .filter(h => h?.kind === 'directory');
+  // The handle re-reads the folder later; the entry API is the fallback for the
+  // browsers that do not hand one over, and it too survives the drop.
+  const read = handles.length
+    ? async () => { const out = []; for (const h of handles) await walkHandle(h, h.name + '/', 1, out); return out; }
+    : async () => { const out = []; for (const en of entries) await readEntry(en, out, ''); return out; };
   S.reload = read;
   ingest(await read());
 });
-$('#pickBtn').onclick = $('#loadBtn').onclick = () => $('#fileInput').click();
+
+/** Opens a folder. The File System Access API hands back a handle rather than a
+ *  copy of the files, so the folder is chosen and allowed once and every refresh
+ *  after that is silent. Where it is missing — Safari, Firefox — the `<input>`
+ *  gives a snapshot, and only a new pick can bring in turns written since. */
+async function pick() {
+  let dir = null;
+  if (window.showDirectoryPicker) {
+    try { dir = await window.showDirectoryPicker({ mode: 'read', id: 'audit' }); }
+    catch (e) {
+      if (e?.name === 'AbortError') return;    // the dialog was closed: nothing to do
+      console.warn('directory picker unavailable:', e);
+    }
+  }
+  if (!dir) { $('#fileInput').click(); return; }
+  S.reload = () => walkHandle(dir, dir.name + '/');
+  ingest(await S.reload());
+}
+$('#pickBtn').onclick = $('#loadBtn').onclick = pick;
 $('#fileInput').onchange = async e => {
   const out = [];
   for (const f of e.target.files) if (queremos(f.name)) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
-  S.reload = null;                             // <input> hands over a snapshot; refresh re-opens the picker
+  S.reload = null;                             // <input> hands over a snapshot; refresh has to ask again
   ingest(out);
 };
 
@@ -870,7 +910,7 @@ async function collectHttp() {
 /** Re-reads the open folder and redraws without losing the reading position. */
 async function refresh() {
   const btn = $('#refreshBtn');
-  if (!S.reload) { $('#fileInput').click(); return; }   // snapshot source: ask for the folder again
+  if (!S.reload) { pick(); return; }           // snapshot source: the folder has to be picked again
   btn.disabled = true; btn.classList.add('spin');
   try {
     const files = await S.reload();
