@@ -68,6 +68,11 @@ header .grow{flex:1}
 .turnitem.overview{border-bottom:1px solid var(--border);border-radius:8px;margin-bottom:6px}
 /* Subagent turns: indented under the header of the task that spawned them. */
 .turnitem.sub{margin-left:10px;width:calc(100% - 10px);box-shadow:inset 2px 0 var(--purple)}
+/* An action taken on the session rather than something asked of the model —
+   today that is compaction: the call that did it, and the turn that inherits it. */
+.turnitem.acao{box-shadow:inset 2px 0 var(--yellow)}
+.turnitem.prompt.acao{box-shadow:inset 2px 0 var(--cyan),inset 4px 0 var(--yellow)}
+.turnitem .tag.act{color:var(--yellow)}
 /* The turn that carries what the user typed: the one place the conversation
    restarts from a person, and not from the model answering itself. */
 .turnitem.prompt{box-shadow:inset 2px 0 var(--cyan)}
@@ -220,6 +225,8 @@ tr.pedido td{background:var(--panel2);color:var(--muted);font-family:var(--mono)
   padding-top:9px;padding-bottom:5px;border-top:1px solid var(--border)}
 tr.pedido b{color:var(--text)}
 tr.pedido .ask{color:var(--cyan)}
+tr.pedido.acao td{background:var(--panel3)}
+tr.pedido .act{color:var(--yellow)}
 .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-bottom:6px}
 .legend b{color:var(--text);font-weight:600}
 .legend em{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
@@ -1454,6 +1461,23 @@ function ultimaConversa(msgs) {
   return -1;
 }
 
+/** The turn that carried the compaction out: opencode runs the summarizer under
+ *  an agent of its own, so the wire says which one it is. It is an action taken
+ *  on the session — the person can ask for it with `/compact`, and the context
+ *  filling up asks for it on their behalf — not part of whatever was being
+ *  worked on when it fired, which is why the overview gives it a row of its own
+ *  instead of billing its tokens to the request it interrupted. */
+const ehCompactacao = t => t.agent === 'compaction';
+
+/** Whether the log says who asked for this compaction. `overflow` is the only
+ *  signal a plugin gets: true is the context limit forcing it, false is elective.
+ *  Absent is neither — opencode knows (`auto`), but no hook passes it on, so the
+ *  honest label is that the trigger was not recorded. */
+const gatilhoCompactacao = c =>
+  c?.overflow === true ? 'forced by context overflow'
+  : c?.overflow === false ? 'elective — asked for, not forced'
+  : null;
+
 /** Index of the message carrying what the person typed, or -1.
  *
  *  On the wire that turn is the one whose last spoken message is a `user` with
@@ -1464,7 +1488,11 @@ function ultimaConversa(msgs) {
  *  it is what turns gemini, bedrock and openai into these same blocks. */
 function promptIndex(t) {
   if (isSub(t)) return -1;                     // a subagent's first message is written by the model
-  if (t.agent === 'title' || t.agent === 'summarize') return -1;     // opencode's own side agents
+  // opencode's own side agents. `compaction` belongs here too: its one message
+  // is the conversation wrapped in a summarization prompt, written by the
+  // harness, and reading it as something the person typed puts a whole
+  // conversation in the label of the band it opens.
+  if (t.agent === 'title' || t.agent === 'summarize' || t.agent === 'compaction') return -1;
   const msgs = ctxStats(t).messages;
   const i = ultimaConversa(msgs);
   if (i < 0 || msgs[i].role !== 'user') return -1;
@@ -1513,39 +1541,71 @@ function pedidos(s) {
   for (const t of s.turns) {
     const txt = userPrompt(t);
     const id = pedidoId(t);
-    const abre = id != null
+    const compacta = ehCompactacao(t);
+    // A compaction carries the `request_index` of whatever was running when it
+    // fired, so by id alone it disappears into that request. It is its own row:
+    // it opens a band, and the turn after it opens the next one, because a band
+    // that started as a compaction holds nothing else.
+    const abre = compacta || cur?.kind === 'compaction' ? true
+      : id != null
       ? !isSub(t) && id !== cur?.id
       // Derived: a retry repeats the request byte for byte, and the turn after a
       // compaction re-sends the same prompt over a rewritten history. Neither is
       // a new thing asked for.
       : !!txt && t.retry_of == null && txt !== cur?.text;
-    if (abre) { cur = { n: 0, id, text: txt, first: t.turn, turns: [] }; list.push(cur); }
+    if (abre) {
+      cur = { n: 0, id: compacta ? null : id, kind: compacta ? 'compaction' : 'prompt',
+              text: compacta ? '' : txt, first: t.turn, turns: [] };
+      list.push(cur);
+    }
     // A request can open on a turn that carries no words of its own — the title
     // agent runs on the prompt the person just sent — so the text is taken from
     // the first turn in the request that does have it.
-    if (cur && !cur.text && txt) cur.text = txt;
+    if (cur && cur.kind !== 'compaction' && !cur.text && txt) cur.text = txt;
     if (cur) { cur.turns.push(t); byTurn.set(t.turn, cur); }
   }
-  for (const p of list) p.text = p.text || ultimoTexto(p.turns[0]) || '';
+  for (const p of list)
+    if (p.kind !== 'compaction') p.text = p.text || ultimoTexto(p.turns[0]) || '';
   // A band with no words, or with the same words as the one before it, is not a
   // new request: it is an id that changed mid-request, because the harness only
   // started recording it there. Fold it back into the request it belongs to.
   const final = [];
+  let n = 0;
   for (const p of list) {
     const prev = final[final.length - 1];
-    if (prev && (!p.text || p.text === prev.text)) {
+    // A compaction band has no words by design and is never the continuation of
+    // the one before it, so neither side of this fold may swallow the other.
+    if (prev && prev.kind !== 'compaction' && p.kind !== 'compaction'
+        && (!p.text || p.text === prev.text)) {
       prev.turns.push(...p.turns);
       for (const t of p.turns) byTurn.set(t.turn, prev);
       continue;
     }
-    p.n = final.length + 1;
+    // Only the things the person asked for are numbered: a compaction sits
+    // between two requests without renumbering them.
+    if (p.kind !== 'compaction') p.n = ++n;
     final.push(p);
   }
   // The boundary is known, the words are not: saying so beats an empty band.
-  for (const p of final) p.text = p.text || '(prompt not recorded)';
+  for (const p of final)
+    p.text = p.kind === 'compaction' ? 'context compacted' : (p.text || '(prompt not recorded)');
   const out = { list: final, byTurn };
   Object.defineProperty(s, '_pedidos', { value: out, enumerable: false });
   return out;
+}
+
+/** How many tokens a compaction threw away, or `null` when that was never
+ *  measured. The plugin can only weigh the discarded side by diffing against the
+ *  previous turn, and the diff chain restarts on a change of model or dialect —
+ *  which is exactly what a compaction turn often is. Newer logs say so outright
+ *  (`not_measured`, no `dropped_tokens`); in older ones the tell is exact all the
+ *  same: a diff that ran always reports `dropped_messages` too, so a lone zero
+ *  without it is an unknown that was written as a zero, not a rewrite that
+ *  discarded nothing. */
+function compactDropped(c) {
+  if (!c || c.not_measured || c.dropped_tokens == null) return null;
+  if (c.dropped_tokens === 0 && c.dropped_messages == null) return null;
+  return c.dropped_tokens;
 }
 
 /** The reasoning variant this turn ran at — "high", "max", "none", or "default"
@@ -1720,7 +1780,11 @@ function sessionTotals(s) {
     retry_tokens: s.turns.filter(t => t.retry_of != null).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
     // Compactions and what they threw away.
     compactacoes: s.turns.filter(t => t.compaction).length || null,
-    compact_dropped: s.turns.reduce((a, t) => a + (t.compaction?.dropped_tokens ?? 0), 0) || null,
+    compact_dropped: s.turns.reduce((a, t) => a + (compactDropped(t.compaction) ?? 0), 0) || null,
+    // Compactions whose diff could not be taken. Their tokens are missing from
+    // the sum above, so the tile says so rather than presenting a partial total
+    // as the whole cost of the rewrites.
+    compact_sem_medida: s.turns.filter(t => t.compaction && compactDropped(t.compaction) == null).length,
     // Latency: the median separates a slow provider from a long reply better than
     // the mean, which a single stuck call distorts entirely.
     ttft_p50: mediana(s.turns.map(t => t.timing?.first_token_ms).filter(x => x != null)),
@@ -1824,17 +1888,26 @@ function renderSide() {
       // The turn that opens a request is the one carrying what the user typed.
       // The label keeps describing the reply, as it does on every other line —
       // the tag says where the person spoke, and the title carries their words.
-      const doUser = !!p && !block.sub && p.first === t.turn;
+      const acao = !!p && !block.sub && p.kind === 'compaction' && p.first === t.turn;
+      const doUser = !!p && !block.sub && p.kind !== 'compaction' && p.first === t.turn;
       const ok = !falhou(t);
       const b = el('button', 'turnitem' + (block.sub ? ' sub' : '')
-        + (doUser ? ' prompt' : '') + (S.sel === t.turn ? ' active' : ''));
+        + (doUser ? ' prompt' : '') + (acao || t.compaction ? ' acao' : '')
+        + (S.sel === t.turn ? ' active' : ''));
       if (doUser) b.title = `user prompt #${p.n} — ${p.turns.length} turn(s)\n\n${p.text}`;
+      if (acao) b.title = 'the compaction itself: the older messages were replaced by the summary this '
+        + `call produced${gatilhoCompactacao(s.turns.find(x => x.turn === t.turn + 1)?.compaction)
+            ? ' — ' + gatilhoCompactacao(s.turns.find(x => x.turn === t.turn + 1)?.compaction) : ''}`;
+      else if (t.compaction) b.title = 'first turn sent against the rewritten history: summary, then the '
+        + 'messages kept after it, then the prompt';
       b.innerHTML = `
         <div class="r1">
           <span class="dot ${t.incomplete ? '' : ok ? 'ok' : 'err'}" ${
             t.incomplete ? 'style="background:var(--yellow)"' : ''}></span>
           <span class="num">#${String(t.turn).padStart(2, '0')}</span>
-          ${doUser ? '<span class="tag">❯ user</span>' : ''}
+          ${doUser ? '<span class="tag">❯ user</span>' : ''}${
+            acao ? '<span class="tag act">⚡ compact</span>'
+                 : t.compaction ? '<span class="tag act">compacted</span>' : ''}
           <span class="ttl">${esc(turnLabel(t))}</span>
         </div>
         <div class="r2">
@@ -2055,8 +2128,12 @@ function renderOverview() {
     // A retry is pure waste: nothing new was asked and the whole prompt was paid
     // for again.
     (tot2.retries ? K(nf(tot2.retry_tokens), `Tokens in retries (${tot2.retries} turn(s))`, 'var(--red)') : '') +
+    // A total of zero over compactions that were never measured is the one thing
+    // this tile must not say: an em dash reads as "no number", which is the fact.
     (tot2.compactacoes
-      ? K(nf(tot2.compact_dropped), `Tokens dropped in compaction (${tot2.compactacoes}×)`, 'var(--yellow)') : '') +
+      ? K(tot2.compact_dropped != null ? nf(tot2.compact_dropped) : '—',
+          `Tokens dropped in compaction (${tot2.compactacoes}×)`
+          + (tot2.compact_sem_medida ? ` — ${tot2.compact_sem_medida} not measured` : ''), 'var(--yellow)') : '') +
     // Provider latency, separated from generation time: they are different
     // problems and only one of them is solved by touching the prompt.
     (tot2.ttft_p50 != null
@@ -2139,9 +2216,20 @@ function renderOverview() {
       // anything: it is the sum of the turns the request generated.
       const cst = doPedido.reduce((a, x) => a + (custo(x) ?? 0), 0) || null;
       const fora = doPedido.filter(semPreco).length;
-      const sep = el('tr', 'pedido');
-      sep.innerHTML = `<td colspan="12" title="${esc(p.text)}"><b class="ask">❯ ${
-        esc(plain(p.text).slice(0, 120))}</b> · <b>request #${p.n}</b> · ${doPedido.length} turn(s) · ${nf(tk)} tk${
+      const sep = el('tr', 'pedido' + (p.kind === 'compaction' ? ' acao' : ''));
+      // The compaction row says what was done to the session, where a request row
+      // says what was asked of it. Same band, so the two read in one sequence.
+      const gatilho = p.kind === 'compaction'
+        ? gatilhoCompactacao(doPedido.find(x => x.compaction)?.compaction
+            ?? s.turns.find(x => x.turn === doPedido[doPedido.length - 1].turn + 1)?.compaction)
+        : null;
+      const cabeca = p.kind === 'compaction'
+        ? `<b class="act" title="the summarizer call itself: the older messages were replaced by its summary${
+            gatilho ? ` — ${esc(gatilho)}` : ''}">⚡ context compacted</b> · <b>compacted</b>${
+            gatilho ? ` · ${esc(gatilho)}` : ' · trigger not recorded'}`
+        : `<b class="ask">❯ ${esc(plain(p.text).slice(0, 120))}</b> · <b>request #${p.n}</b>`;
+      sep.innerHTML = `<td colspan="12" title="${esc(p.text)}">${cabeca} · ${
+        doPedido.length} turn(s) · ${nf(tk)} tk${
         cst != null ? ` · <b${fora ? ` title="${fora} turn(s) with no rate: they count in the tokens, not in the cost"` : ''
           }>${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
       tb.append(sep);
@@ -2156,7 +2244,9 @@ function renderOverview() {
           ? ` <span class="chip red solid" title="repeats turn #${t.retry_of} byte for byte — ${esc(t.retry_reason ?? 'the previous attempt failed')}">retry</span>` : ''}${
         t.compaction
           ? ` <span class="chip yellow" title="first turn after the history was rewritten${
-              t.compaction.overflow ? ' — forced by context overflow' : ''}: ${nf(t.compaction.dropped_tokens ?? 0)} tk dropped">compacted</span>` : ''}</td>
+              t.compaction.overflow ? ' — forced by context overflow' : ''}: ${
+              compactDropped(t.compaction) != null ? nf(compactDropped(t.compaction)) + ' tk dropped'
+                                                   : 'how much it dropped was not measured'}">compacted</span>` : ''}</td>
       <td style="white-space:nowrap">${esc(t.model)}${variantOf(t)
         ? ` <span style="color:var(--faint)">· ${esc(variantOf(t))}</span>` : ''}${
         t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
@@ -2284,6 +2374,26 @@ function renderTurnHead(t) {
     h.append(el('div', 'notebox',
       '<b>Incomplete turn:</b> ' + esc(t.note ?? 'the response did not arrive before the process ended.')
       + ' The request is recorded, but there is no reply and no token count — this turn stays out of the totals.'));
+  // The first prompt written against a rewritten history. Without this the
+  // conversation below reads as a bug: the summary looks like a message nobody
+  // sent, and the messages kept after it look like history that should be gone.
+  if (t.compaction) {
+    const c = t.compaction;
+    h.append(el('div', 'notebox',
+      '<b>First turn after a compaction'
+      + (c.overflow ? ', forced by context overflow' : '') + ':</b> the conversation below is not the one that '
+      + 'was there before. The older messages were replaced by a summary — an <b>assistant</b> message, preceded '
+      + 'by the synthetic <b>user</b> message the harness writes to introduce it — and the most recent messages '
+      + 'were kept verbatim after it, so what follows reads as summary, then real history, then your new prompt. '
+      + (compactDropped(c) != null
+          ? `Dropped: <b>${nf(compactDropped(c))}</b> tokens`
+            + (c.dropped_messages != null ? ` across <b>${nf(c.dropped_messages)}</b> message(s)` : '') + '.'
+          : '<b>How much it dropped was not measured</b>'
+            + (c.not_measured ? ': ' + esc(c.not_measured)
+                              : ': there was no previous turn to diff against, which is what a change of model or '
+                                + 'dialect on the compaction turn leaves behind')
+            + ' — absent here means unknown, not zero.')));
+  }
   return h;
 }
 
