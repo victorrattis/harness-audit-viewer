@@ -659,7 +659,10 @@ function normalizeTurn(raw, fileName, mtime) {
     // viewer's re-reading of them.
     const decoded = !!(raw.prompt || raw.usage?.source);
     const t = { ...raw, turn: num, _format: decoded ? 'audit2' : 'stream' };
-    const dialect = raw.prompt?.dialect;
+    // The dialect the plugin read off the body's own keys. `llm-audit.ts` wrote it
+    // under `prompt`, `llm-audit-simple.ts` beside the body it describes; either
+    // beats `detectApi`, which has to guess from the shape.
+    const dialect = raw.request?.dialect ?? raw.prompt?.dialect;
     t._api = dialect && (NATIVE_API.has(dialect) || API_LABEL[dialect]) ? dialect : detectApi(t);
     t._native = NATIVE_API.has(t._api);
     return t;
@@ -1108,10 +1111,13 @@ function ctxStats(turn) {
 
 /** Prompt composition: where the context tokens ended up.
  *
- *  When the log carries `prompt`, the numbers are the provider's — the billed
- *  prompt total, split across the parts by character count — and they add up to
- *  `usage.prompt` exactly. On older logs it falls back to chars/4, which is only
- *  an order of magnitude. `tokens.source` says which of the two is on screen. */
+ *  The numbers are the provider's — the billed prompt total, split across the
+ *  parts by character count — and they add up to `usage.prompt`. Which side does
+ *  the split is all that changes: `llm-audit.ts` did it before writing the file
+ *  and left it under `prompt`; for a log that only carries the body, it is done
+ *  here, off `usage.prompt` and the characters of each part. Only a turn the
+ *  provider never counted falls back to chars/4, which is an order of magnitude.
+ *  `comp.source` says which of the three is on screen. */
 function composition(t) {
   if (t._comp) return t._comp;
   const p = t.prompt;
@@ -1134,32 +1140,53 @@ function composition(t) {
     };
   } else {
     const c = ctxStats(t);
-    const est = ch => Math.round(ch / 4);
     const sysPieces = c.sys.map((b, i) => ({ index: i, chars: (b.text || '').length,
-      tokens: est((b.text || '').length), cache: b.cache_control?.type,
+      cache: b.cache_control?.type,
       preview: (b.text || '').slice(0, 240).replace(/\s+/g, ' ') }));
     const toolPieces = c.tools.map((x, i) => ({ index: i, name: x.name,
-      chars: JSON.stringify(x).length, tokens: est(JSON.stringify(x).length),
+      chars: JSON.stringify(x).length,
       description_chars: (x.description || '').length,
       schema_chars: JSON.stringify(x.input_schema ?? {}).length,
       preview: (x.description || '').slice(0, 240).replace(/\s+/g, ' ') }));
-    const msgPieces = c.messages.map((m, i) => {
-      const ch = JSON.stringify(m).length;
-      return { index: i, role: m.role, chars: ch, tokens: est(ch),
-        kinds: [...new Set((Array.isArray(m.content) ? m.content : []).map(b => b.type))],
-        preview: preview(Array.isArray(m.content) ? m.content : []) };
-    });
+    const msgPieces = c.messages.map((m, i) => ({ index: i, role: m.role, chars: JSON.stringify(m).length,
+      kinds: [...new Set((Array.isArray(m.content) ? m.content : []).map(b => b.type))],
+      preview: preview(Array.isArray(m.content) ? m.content : []) }));
+    // Counted off the pieces themselves, not off `ctxStats`' own three totals:
+    // those measure the parts slightly differently (the brackets and commas
+    // around the message array, the tool wrapper before it is unwrapped), and a
+    // denominator that does not match its numerators leaves the three groups
+    // adding up to less than the prompt they are splitting.
+    const chars = a => a.reduce((x, y) => x + y.chars, 0);
+    const totalChars = chars(sysPieces) + chars(toolPieces) + chars(msgPieces);
+    // The provider counted this prompt; what the log does not say is how the
+    // count split across the parts. Splitting its total by character count adds
+    // up exactly, and it is the same reading `llm-audit.ts` used to bake into
+    // the file. Only a turn the provider never counted — a refusal — falls back
+    // to the ~4 chars a token rule, which is an order of magnitude and says so.
+    const billed = t.usage?.prompt || null;
+    const scale = billed && totalChars ? billed / totalChars : 0.25;
+    for (const piece of [...sysPieces, ...toolPieces, ...msgPieces]) piece.tokens = Math.round(piece.chars * scale);
     const sum = a => a.reduce((x, y) => x + y.tokens, 0);
     comp = {
-      measured: false, source: 'characters / 4 (the log carries no per-part count)',
-      cpt: 4, chars: c.sysChars + c.toolChars + c.msgChars,
+      measured: !!billed,
+      source: billed ? 'provider count, split by character count'
+                     : 'characters / 4 (the provider counted nothing on this turn)',
+      cpt: billed ? Math.round(totalChars / billed * 100) / 100 : 4,
+      chars: totalChars,
       total: sum(sysPieces) + sum(toolPieces) + sum(msgPieces),
       groups: [
-        { key: 'system',   label: 'System',    color: 'var(--accent)', tokens: sum(sysPieces),  chars: c.sysChars,  pieces: sysPieces },
-        { key: 'tools',    label: 'Tools',     color: 'var(--orange)', tokens: sum(toolPieces), chars: c.toolChars, pieces: toolPieces },
-        { key: 'messages', label: 'Messages',  color: 'var(--green)',  tokens: sum(msgPieces),  chars: c.msgChars,  pieces: msgPieces },
+        { key: 'system',   label: 'System',   color: 'var(--accent)', tokens: sum(sysPieces),  chars: chars(sysPieces),  pieces: sysPieces },
+        { key: 'tools',    label: 'Tools',    color: 'var(--orange)', tokens: sum(toolPieces), chars: chars(toolPieces), pieces: toolPieces },
+        { key: 'messages', label: 'Messages', color: 'var(--green)',  tokens: sum(msgPieces),  chars: chars(msgPieces),  pieces: msgPieces },
       ],
     };
+    // Where the request asked the provider to cache. The plugin located every
+    // marker while it had the body in hand — in every dialect, and in the tools
+    // and the messages too, not only the system blocks the map above can see.
+    for (const bp of t.request?.cache?.breakpoints ?? []) {
+      const piece = comp.groups.find(g => g.key === bp.in)?.pieces[bp.index];
+      if (piece) { piece.cache = bp.type; piece.ttl = bp.ttl; }
+    }
   }
   Object.defineProperty(t, '_comp', { value: comp, enumerable: false });
   return comp;
@@ -1222,7 +1249,12 @@ function promptSeq(t) {
     scope: s.scope, label: s.label, index: s.piece.index, name: s.piece.name,
     kind: s.piece.cache, prefixTokens: s.end,
   }));
-  const out = { seq, marks, promptTokens: cum, marksKnown: !!t.prompt || marks.length > 0 };
+  // Whether the log records where the markers are — not whether it found any.
+  // A decoded request (`dialect` beside the body, or the older `prompt`) would
+  // have carried them, so no marker there means none was asked for; a log that
+  // decodes nothing cannot tell the two apart and has to say so.
+  const out = { seq, marks, promptTokens: cum,
+                marksKnown: !!t.prompt || t.request?.dialect != null || marks.length > 0 };
   Object.defineProperty(t, '_seq', { value: out, enumerable: false });
   return out;
 }
@@ -1311,13 +1343,65 @@ const sameChain = (a, b) => chainOf(a) === chainOf(b) && (!a.agent || !b.agent |
  *  numbering, and there is nothing here to line up with. */
 const counted = t => t?.prompt ? (t.prompt.totals?.message_count ?? (t.prompt.messages ?? []).length) : null;
 
-/** Redoes the reuse diff over the bodies, where the log's own diff counted the
- *  marker or the billing header as a change.
+/** The turn's three parts, canonicalized, on the numbering the screen is indexed
+ *  by when the log carries no decomposition of its own.
  *
- *  It only ever corrects a diff the log already made — same pair of turns,
- *  `previous_turn` says which —, never invents one where the plugin found none.
- *  When the two agree, the logged object stays: the chip that says the number
- *  was redone should only show up where it really was. */
+ *  Two numberings exist and they do not agree. `fingerprint` follows the
+ *  plugin's — what `prompt.messages` counts —, which a logged diff has to line up
+ *  with. Where there is no logged diff there is no plugin numbering to honour,
+ *  and everything on screen runs on `ctxStats`, which lifts the system and
+ *  developer messages out of the list on every OpenAI dialect. Diffing on one
+ *  numbering and slicing the tokens on the other moves the border by a message. */
+function bodyParts(t) {
+  if (t._parts !== undefined) return t._parts;
+  const c = t.request?.body ? ctxStats(t) : null;
+  const out = c && (c.messages.length || c.sys.length)
+    ? { system: canonKey(c.sys), tools: canonKey(c.tools), messages: c.messages.map(canonKey) }
+    : null;
+  Object.defineProperty(t, '_parts', { value: out, enumerable: false });
+  return out;
+}
+
+/** The diff between two prompts, computed over the bodies themselves: how far
+ *  this turn is still the previous one, and what it added. `null` when a body did
+ *  not come inline, which is the one case where nothing here can be redone.
+ *
+ *  `parts` is which reading of the prompt to diff on — `fingerprint` to line up
+ *  with a diff the log already made, `bodyParts` to line up with the screen.
+ *  Either way the cache marker and the volatile billing id are already out, so a
+ *  turn that changed nothing but the marker comes out identical, as it should. */
+function diffTurns(p, t, parts) {
+  const b = parts(t), a = parts(p);
+  if (!a || !b) return null;
+  let stable = 0;
+  while (stable < a.messages.length && stable < b.messages.length
+         && a.messages[stable] === b.messages[stable]) stable++;
+  const system_changed = a.system !== b.system, tools_changed = a.tools !== b.tools;
+  // The per-message tokens are the provider's total split by characters — the
+  // same split `composition` puts on screen, so the two sides of the border keep
+  // adding up to the prompt.
+  const pieces = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
+  const sum = (from, to, f) => pieces.slice(from, to).reduce((x, q) => x + (q[f] ?? 0), 0);
+  return {
+    previous_turn: p.turn, system_changed, tools_changed,
+    stable_messages: stable,
+    changed_at: stable < a.messages.length ? stable : null,
+    added_messages: b.messages.length - stable,
+    dropped_messages: Math.max(0, a.messages.length - stable),
+    prefix_stable: !system_changed && !tools_changed && stable >= a.messages.length,
+    resent_chars: sum(0, stable, 'chars'), new_chars: sum(stable, undefined, 'chars'),
+    resent_tokens: sum(0, stable, 'tokens'), new_tokens: sum(stable, undefined, 'tokens'),
+  };
+}
+
+/** Gives every turn its diff against the previous one — computing it where the
+ *  log has none, and correcting it where the log's own counted the cache marker
+ *  or the billing header as a change.
+ *
+ *  A log that carries only the request bodies (`llm-audit-simple`) has no diff at
+ *  all: it stores the source instead of a reading of it, and this is the reading.
+ *  A log that carries one keeps it unless the recomputation disagrees — the chip
+ *  that says the number was redone should only show up where it really was. */
 function repairReuse(sessions) {
   for (const s of sessions) {
     const chain = new Map();                   // conversation -> its latest turn so far
@@ -1330,7 +1414,14 @@ function repairReuse(sessions) {
       const p0 = chain.get(key);
       const p = p0 && sameChain(p0, t) ? p0 : null;
       chain.set(key, t);
-      if (!R) continue;
+      if (!R) {
+        // No diff in the log. With a previous turn of the same conversation, the
+        // bodies are right here and the diff is made now; without one, this is
+        // the first turn and there is genuinely nothing to compare it to.
+        const d = p ? diffTurns(p, t, bodyParts) : null;
+        if (d) t.reuse = { ...d, derived: true };
+        continue;
+      }
       if (!p) {
         // Nothing to compare it to: the first turn of this conversation. The log
         // diffed it against a neighbour from another one — opencode's `title`
@@ -1340,42 +1431,19 @@ function repairReuse(sessions) {
         t.reuse = undefined;
         continue;
       }
-      const b = fingerprint(t), a = fingerprint(p);
-      if (!a || !b) continue;
+      const d = diffTurns(p, t, fingerprint);
+      if (!d) continue;
       // The border is drawn on the plugin's own numbering — `prompt.messages`,
       // which is what the screen numbers the rows by and what the token split
       // below is indexed on. Reading the body a different way than the plugin
       // did would move the border to the wrong row, so unless both sides agree
       // on how many messages there are, the log stands.
-      if (counted(t) !== b.messages.length || counted(p) !== a.messages.length) continue;
-      let stable = 0;
-      while (stable < a.messages.length && stable < b.messages.length
-             && a.messages[stable] === b.messages[stable]) stable++;
-      const sysChanged = a.system !== b.system, toolsChanged = a.tools !== b.tools;
-      if (stable === R.stable_messages && sysChanged === !!R.system_changed
-          && toolsChanged === !!R.tools_changed && p.turn === R.previous_turn) continue;
-      // The per-message tokens are the provider's total split by characters —
-      // the same split the plugin used for `resent_tokens`/`new_tokens`, so the
-      // two sides of the border keep adding up to the prompt.
-      const pieces = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
-      const sum = (from, to, f) => pieces.slice(from, to).reduce((x, p) => x + (p[f] ?? 0), 0);
+      if (counted(t) !== fingerprint(t).messages.length
+          || counted(p) !== fingerprint(p).messages.length) continue;
+      if (d.stable_messages === R.stable_messages && d.system_changed === !!R.system_changed
+          && d.tools_changed === !!R.tools_changed && p.turn === R.previous_turn) continue;
       Object.defineProperty(t, '_reuseLogged', { value: R, enumerable: false });
-      t.reuse = {
-        ...R,
-        previous_turn: p.turn,
-        system_changed: sysChanged,
-        tools_changed: toolsChanged,
-        stable_messages: stable,
-        changed_at: stable < a.messages.length ? stable : null,
-        added_messages: b.messages.length - stable,
-        dropped_messages: Math.max(0, a.messages.length - stable),
-        prefix_stable: !sysChanged && !toolsChanged && stable >= a.messages.length,
-        resent_chars: sum(0, stable, 'chars'),
-        new_chars: sum(stable, undefined, 'chars'),
-        resent_tokens: sum(0, stable, 'tokens'),
-        new_tokens: sum(stable, undefined, 'tokens'),
-        recomputed: true,
-      };
+      t.reuse = { ...R, ...d, recomputed: true };
     }
   }
 }
@@ -1476,8 +1544,16 @@ function cacheAudit(t) {
     verdict = 'sem-dados';
     reason = 'the provider did not count this turn\'s tokens';
   } else if (!marks.length && !cw) {
+    // A key is the other way of asking: the OpenAI dialects pass a
+    // `prompt_cache_key` and Gemini points at a `cachedContent` resource, and
+    // the provider decides where the prefix ends. No marker there is not the
+    // same finding as no cache asked for.
+    const key = t.request?.cache?.key;
     verdict = 'sem-marcador';
-    reason = cr > 0
+    reason = key
+      ? `no positional marker: the request passed a cache key and left the prefix to the provider${
+          cr > 0 ? '' : ' — and nothing came back from it'}`
+      : cr > 0
       ? 'the request asked for no cache — what came back is the provider\'s implicit cache'
       : 'the request asked for no cache at all: the whole prompt is paid at full price';
   } else if (coldReason) {
@@ -1553,6 +1629,23 @@ function compLegend(comp) {
  *  never became a response at all — cut network, timeout, abort. The second case
  *  has no HTTP status, so looking only at the status hides the failure. */
 const falhou = t => !!t.error || (t.response?.status != null && t.response.status >= 400);
+
+/** Why it failed, in the two shapes the field arrives in.
+ *
+ *  A request that never left carries a JS error — `{name, message, cause}`. One
+ *  the provider refused carries the provider's own body, and there the message
+ *  sits a level down (`error.error.message` on Anthropic and Bedrock) or at the
+ *  top (OpenAI, Gemini). Reading only the top level reports a rate limit as "the
+ *  provider returned no body at all", with the reason sitting in the file. */
+function errMessage(t) {
+  const e = t.error;
+  if (e == null) return textOf(t.response?.body) || '';
+  if (typeof e === 'string') return e;
+  const inner = (e.error && typeof e.error === 'object') ? e.error : e;
+  const msg = inner.message ?? e.message ?? inner.Message;
+  if (typeof msg === 'string' && msg) return (inner.type && inner.type !== 'error' ? inner.type + ': ' : '') + msg;
+  return e.name ?? JSON.stringify(e);
+}
 
 /** How far the provider's total differs from what the plugin added up. Non-zero
  *  means a counter went unread — the row's number sits below what was actually
@@ -1822,6 +1915,40 @@ function taxaGeracao(turns) {
   return ms ? out / (ms / 1000) : null;
 }
 
+/** The prompt's message rows in the shape the tool accounting needs: what each
+ *  message weighs, and which tool calls and results sit inside it.
+ *
+ *  `llm-audit.ts` wrote these rows into the file. A log that carries only the
+ *  request body has them all the same, and needs no per-dialect code to find
+ *  them: `ctxStats` already normalizes all five dialects into Anthropic-shaped
+ *  blocks, so `tool_use`/`tool_result` is one path. The weights are the same
+ *  split `composition` puts on screen, and the name of the tool a result belongs
+ *  to comes from the call it answers, which is in the same body. */
+function promptRows(t) {
+  if (t.prompt?.messages) return t.prompt.messages;
+  if (t._rows) return t._rows;
+  const msgs = ctxStats(t).messages;
+  const pieces = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
+  const names = new Map();                     // tool_use id -> the tool it called
+  const rows = msgs.map((m, i) => {
+    const tool_calls = [], tool_results = [];
+    for (const b of (Array.isArray(m.content) ? m.content : [])) {
+      if (b?.type === 'tool_use') {
+        if (b.name) names.set(b.id, b.name);
+        tool_calls.push({ id: b.id, name: b.name, chars: JSON.stringify(b.input ?? {}).length });
+      } else if (b?.type === 'tool_result') {
+        tool_results.push({ id: b.tool_use_id, tool: names.get(b.tool_use_id),
+                            chars: JSON.stringify(b.content ?? '').length,
+                            error: b.is_error === true });
+      }
+    }
+    return { role: m.role, chars: pieces[i]?.chars ?? 0, tokens: pieces[i]?.tokens ?? 0,
+             tool_calls, tool_results };
+  });
+  Object.defineProperty(t, '_rows', { value: rows, enumerable: false });
+  return rows;
+}
+
 /** What each tool costs, in two currencies that do not convert into each other.
  *
  *  In tokens, derived from the turns: how much its output took up in the prompt
@@ -1850,7 +1977,7 @@ function ferramentas(s) {
 
   for (const t of s.turns) {
     const stable = t.reuse?.stable_messages ?? 0;
-    (t.prompt?.messages ?? []).forEach((m, i) => {
+    promptRows(t).forEach((m, i) => {
       const novo = i >= stable;
       if (novo) for (const c of m.tool_calls ?? []) if (c.name) linha(c.name).calls++;
       const rs = m.tool_results ?? [];
@@ -2493,7 +2620,7 @@ function renderTurnHead(t) {
       ${st != null ? `<span class="chip ${ok ? 'green' : 'red'} solid">HTTP ${st}</span>` : ''}
       ${t.incomplete ? '<span class="chip yellow solid">incomplete</span>' : ''}
       ${res.error ? '<span class="chip red solid">error</span>' : ''}
-      ${t.error ? `<span class="chip red solid">failed · ${esc(t.error.message ?? t.error.name ?? 'network error')}</span>` : ''}</h1>
+      ${t.error ? `<span class="chip red solid">failed · ${esc(errMessage(t) || 'network error')}</span>` : ''}</h1>
     <div class="metarow">
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
@@ -2508,6 +2635,7 @@ function renderTurnHead(t) {
       ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
         return `<span class="chip ${V.chip} solid" title="${esc(A.reason)}">${V.glyph} ${esc(V.label)}</span>`; })()}
       ${chip('cyan', t.cache_hit_rate != null ? 'cache ' + (t.cache_hit_rate * 100).toFixed(1) + '%' : null)}
+      ${t.context_limit && u.prompt ? `<span class="chip ${u.prompt / t.context_limit > 0.8 ? 'red solid' : ''}" title="the prompt against this model's context window. Past ~80% the harness starts compacting, and a compaction rewrites the history — which throws the whole cached prefix away">context ${(u.prompt / t.context_limit * 100).toFixed(0)}% of ${nf(t.context_limit)}</span>` : ''}
       <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span>
       ${chip('', res.bytes != null ? bytes(res.bytes) : null)}
       ${chip('', res.service_tier ? 'tier ' + esc(res.service_tier) : null)}
@@ -2648,7 +2776,7 @@ function renderConversation(t) {
     const falhou = (st != null && st >= 400) || t.error;
     body.append(el('div', falhou ? 'notebox' : 'empty', falhou
       ? `<b>The request failed${st != null ? ` with HTTP ${st}` : ''}:</b> ` +
-        esc((t.error?.message ?? textOf(t.response?.body)) || 'the provider returned no body at all.') +
+        esc(errMessage(t) || 'the provider returned no body at all.') +
         ' There is no reply to show; the turn stays in the log because the request did go out.'
       : 'No content blocks in the reply.'));
   }
@@ -2856,6 +2984,7 @@ function cachePanel(t) {
      ${R ? `<span class="chip">vs. turn ${R.previous_turn}</span>` : ''}
      ${!R && t._reuseLogged ? '<span class="chip" title="the log diffed this turn against a turn of another conversation — another agent, model or dialect — and everything came out diverged at message #0; there is nothing here to compare it to">first turn of this conversation</span>' : ''}
      ${R?.recomputed ? '<span class="chip" title="the log counted the rolling cache marker and the billing header as changes; this diff was redone over the body, which ignores both">diff redone over the body</span>' : ''}
+     ${R?.derived ? '<span class="chip" title="the log stores the request bodies and no diff of its own; this one was computed here, over those bodies">diff computed from the bodies</span>' : ''}
      ${R ? `<span class="chip cyan">${nf(R.stable_messages)} identical msg${R.stable_messages === 1 ? '' : 's'} · ${nf(resent)} tk resent</span>` : ''}
      ${R ? `<span class="chip green">${nf(R.added_messages)} new msg${R.added_messages === 1 ? '' : 's'} · ${nf(fresh)} tk</span>` : ''}
      ${R?.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg(s) gone</span>` : ''}
@@ -2867,6 +2996,7 @@ function cachePanel(t) {
      ${A.broken > 0 ? `<span class="chip red solid" title="they were written on the previous turn and were invalidated by the history rewrite">invalidated ${nf(A.broken)} tk</span>` : ''}
      ${A.tailTokens > 0 ? `<span class="chip ${A.verdict === 'cauda' ? 'yellow solid' : 'yellow'}" title="prompt after the last marker: paid at full price every turn">tail ${nf(A.tailTokens)} tk</span>` : ''}
      ${A.marksKnown ? `<span class="chip ${A.marksUsed > A.marksLimit ? 'red solid' : A.marksUsed ? '' : 'yellow'}">${A.marksUsed}/${A.marksLimit} breakpoints</span>` : '<span class="chip yellow">markers not recorded</span>'}
+     ${t.request?.cache?.key ? `<span class="chip cyan" title="the request named a cache key and let the provider decide where the prefix ends — the OpenAI and Gemini way of asking">cache key ${esc(t.request.cache.key)}</span>` : ''}
      ${u.cache_write ? `<span class="chip">TTL ${A.ttlSeconds === 3600 ? '1h' : '5min'}</span>` : ''}
      ${A.gapSeconds != null ? `<span class="chip" title="gap since the previous turn of this conversation">gap ${dur(A.gapSeconds)}</span>` : ''}
      ${A.hitRate != null ? `<span class="chip ${A.hitRate > 0.9 ? 'green' : A.hitRate > 0.5 ? 'yellow' : 'red'}" title="cache_read / (cache_read + cache_write + input)">hit rate ${(A.hitRate * 100).toFixed(1)}%</span>` : ''}`;
@@ -3072,7 +3202,10 @@ function renderRequest(t) {
   add(kv({ method: rq.method, url: rq.url, status: res.status, bytes: res.bytes,
     message_id: res.id, session: t.session,
     started_at: t.started_at ? fmtTime(t.started_at) + (t._approxTime ? '  (file mtime, approximate)' : '') : null,
-    elapsed_seconds: t.elapsed_seconds, stop_reason: res.stop_reason,
+    elapsed_seconds: t.elapsed_seconds,
+    // The provider's own word rides on the reply; `finish_reason` beside it is
+    // that word normalized. Older logs put the raw one on the response.
+    stop_reason: res.stop_reason ?? t.reply?.stop_reason, finish_reason: res.finish_reason,
     service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Request / response'));
   const cx = ctxStats(t);
   add(kv({ api: apiLabel(t._api), agent: t.agent, variant: variantOf(t),
@@ -3081,7 +3214,8 @@ function renderRequest(t) {
     reasoning: b.reasoning ? `effort ${b.reasoning.effort ?? '—'} · summary ${b.reasoning.summary ?? '—'}` : null,
     temperature: b.temperature, top_p: b.top_p,
     tool_choice: b.tool_choice == null ? null : (typeof b.tool_choice === 'string' ? b.tool_choice : JSON.stringify(b.tool_choice)),
-    store: b.store, messages: cx.messages.length, tools: cx.tools.length }, 'Parameters'));
+    store: b.store, messages: cx.messages.length, tools: cx.tools.length,
+    context_limit: t.context_limit }, 'Parameters'));
   add(kv(rq.headers, 'Request headers'));
   add(kv(res.headers, 'Response headers'));
   const u = t.usage ?? {};
