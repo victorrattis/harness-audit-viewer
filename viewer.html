@@ -775,6 +775,7 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
   // with the run folders of the old format.
   const sessions = [...map.values()].filter(s => s.turns.length);
   sessions.forEach(s => s.turns.sort((a, b) => a.turn - b.turn));
+  repairReuse(sessions);
   sessions.sort((a, b) => b.id.localeCompare(a.id));
   if (!sessions.length) {
     if (!opts.keep) alert('No valid log found in that folder.');
@@ -1067,7 +1068,7 @@ function ctxStats(turn) {
   if (turn._ctx) return turn._ctx;              // a request can be hundreds of KB
   const body = turn.request?.body ?? {};
   const api = turn._api ?? 'anthropic';
-  let sys = [], messages = [];
+  let sys = [], messages = [], base = null;    // `base[i]`: the plugin's number for row i, when it is not i
   if (api === 'gemini') {
     const si = body.systemInstruction ?? body.system_instruction;
     sys = (si?.parts ?? []).filter(p => typeof p.text === 'string').map(p => ({ text: p.text }));
@@ -1080,9 +1081,19 @@ function ctxStats(turn) {
     messages = body.messages ?? [];
   } else {
     if (typeof body.instructions === 'string' && body.instructions) sys.push({ text: body.instructions, role: 'instructions' });
+    base = [];
+    // The plugin numbers the messages its own way and the screen has to follow
+    // it: `prompt.messages`, the reuse border and the "diverged at msg #n" chip
+    // are all on that numbering. It lifts the system/developer messages out on
+    // `openai-chat` — as this does — but keeps them on `openai-responses`, where
+    // the `developer` item is message #0 and everything after it is one further
+    // along than the row it is drawn on.
+    let n = 0;
     for (const it of (api === 'openai-responses' ? body.input : body.messages) ?? []) {
-      if (it && (it.role === 'system' || it.role === 'developer')) sys.push({ text: textOf(it.content), role: it.role });
-      else messages.push(normMsg(it ?? {}));
+      const lifted = it && (it.role === 'system' || it.role === 'developer');
+      if (lifted) sys.push({ text: textOf(it.content), role: it.role });
+      else { base.push(n); messages.push(normMsg(it ?? {})); }
+      if (!lifted || api === 'openai-responses') n++;
     }
   }
   const sysChars = sys.reduce((a, s) => a + (s.text || '').length, 0);
@@ -1090,7 +1101,7 @@ function ctxStats(turn) {
   // Bedrock keeps the tools in toolConfig, not in tools.
   const rawTools = api === 'bedrock' ? body.toolConfig?.tools : body.tools;
   const toolChars = JSON.stringify(rawTools ?? []).length;
-  const ctx = { sys, sysChars, msgChars, toolChars, tools: normTools(rawTools), messages };
+  const ctx = { sys, sysChars, msgChars, toolChars, tools: normTools(rawTools), messages, base };
   Object.defineProperty(turn, '_ctx', { value: ctx, enumerable: false });
   return ctx;
 }
@@ -1214,6 +1225,159 @@ function promptSeq(t) {
   const out = { seq, marks, promptTokens: cum, marksKnown: !!t.prompt || marks.length > 0 };
   Object.defineProperty(t, '_seq', { value: out, enumerable: false });
   return out;
+}
+
+/** The prompt part as the model reads it: the projection the reuse diff has to
+ *  run over, and not the raw bytes.
+ *
+ *  Two things change from one turn to the next without a word of the prompt
+ *  changing. The rolling cache marker moves forward, and the client sends the
+ *  message it lands on wrapped in a text block and that very same message, one
+ *  turn later, as a bare string — same text, other bytes. And Claude Code
+ *  smuggles `x-anthropic-billing-header` in as the first system block, carrying
+ *  the id of the request before it, so it is new on every turn by construction.
+ *  A log written before the plugin normalized the two carries a diff that calls
+ *  the previous turn's last step new, every turn, and reads the whole session as
+ *  a broken prefix — against a `cache_read` that says otherwise. */
+const VOLATILE_ID = /\s*\b(cc_prev_req|cc_prompt_id)=[^;"]*;?/g;
+function canonical(v, depth = 0) {
+  if (typeof v === 'string') return v.replace(VOLATILE_ID, '');
+  if (depth > 12 || v === null || typeof v !== 'object') return v ?? null;
+  if (Array.isArray(v)) return v.map(x => canonical(x, depth + 1));
+  const out = {};
+  // Sorted, so the fingerprint does not depend on the order the client happened
+  // to serialize the keys in.
+  for (const k of Object.keys(v).sort()) {
+    if (k === 'cache_control' || k === 'cachePoint') continue;
+    out[k] = k === 'content' && typeof v[k] === 'string'
+      ? [{ text: canonical(v[k], depth + 1), type: 'text' }]        // the wrapped message and the bare one are one message
+      : canonical(v[k], depth + 1);
+  }
+  return out;
+}
+const canonKey = v => JSON.stringify(canonical(v));
+
+/** The turn's three parts, fingerprinted — `null` when the body did not come
+ *  inline, which is the one case where nothing can be redone here.
+ *
+ *  It splits the body the way the plugin does, and not the way `ctxStats` does:
+ *  the indices have to line up with `prompt.messages`, which is what the screen
+ *  numbers the messages by. The two differ — on `openai-responses` the plugin
+ *  counts the `developer` item as message #0 and `ctxStats` lifts it into the
+ *  system block — and one index of drift would move the border to the wrong row. */
+function fingerprint(t) {
+  if (t._fp !== undefined) return t._fp;
+  const b = t.request?.body;
+  const d = t.prompt?.dialect ?? t._api ?? 'anthropic';
+  const list = d === 'gemini' ? b?.contents : d === 'openai-responses' ? b?.input : b?.messages;
+  const isSys = m => m && (m.role === 'system' || m.role === 'developer');
+  let out = null;
+  if (Array.isArray(list) && list.length) {
+    // OpenAI carries the system prompt as ordinary messages; the plugin lifts
+    // those out, and only those.
+    const messages = d === 'openai-chat' ? list.filter(m => !isSys(m)) : list;
+    const system = d === 'openai-chat' ? list.filter(isSys).map(m => m.content ?? m)
+      : typeof b.system === 'string' ? [b.system] : Array.isArray(b.system) ? b.system : [];
+    out = { system: canonKey(system), tools: canonKey(toolList(b, d)), messages: messages.map(canonKey) };
+  }
+  Object.defineProperty(t, '_fp', { value: out, enumerable: false });
+  return out;
+}
+
+/** The tool list as the plugin flattens it, per dialect. */
+function toolList(b, d) {
+  if (d === 'bedrock') return (b.toolConfig?.tools ?? []).map(x => x?.toolSpec ?? x);
+  const tools = Array.isArray(b.tools) ? b.tools : [];
+  if (d === 'gemini') return tools.flatMap(x => x?.functionDeclarations ?? x?.function_declarations ?? [x]);
+  return tools.map(x => (x && typeof x.function === 'object' && x.function) ? x.function : x);
+}
+
+/** One conversation, for the purpose of diffing two prompts against each other:
+ *  the chain the plugin keys its own history by — same session, same model, same
+ *  dialect. */
+const chainOf = t => [t.session ?? '?', t.model ?? '', t._api ?? ''].join('|');
+
+/** …and the agent narrows it: opencode runs its side agents (`title`,
+ *  `summarize`) on the session's own id, and their prompt has nothing to do with
+ *  the build agent's — diffed against each other they give a turn where
+ *  everything diverged at message #0 and the user's own message reads as new,
+ *  having travelled twice. Only when both sides say which agent they are: an
+ *  unknown one is not a different one, and treating it as such drops a good
+ *  diff. */
+const sameChain = (a, b) => chainOf(a) === chainOf(b) && (!a.agent || !b.agent || a.agent === b.agent);
+
+/** How many messages the plugin decomposed this turn into, or `null` when it
+ *  did not decompose it at all — which is also when nothing downstream is on its
+ *  numbering, and there is nothing here to line up with. */
+const counted = t => t?.prompt ? (t.prompt.totals?.message_count ?? (t.prompt.messages ?? []).length) : null;
+
+/** Redoes the reuse diff over the bodies, where the log's own diff counted the
+ *  marker or the billing header as a change.
+ *
+ *  It only ever corrects a diff the log already made — same pair of turns,
+ *  `previous_turn` says which —, never invents one where the plugin found none.
+ *  When the two agree, the logged object stays: the chip that says the number
+ *  was redone should only show up where it really was. */
+function repairReuse(sessions) {
+  for (const s of sessions) {
+    const chain = new Map();                   // conversation -> its latest turn so far
+    for (const t of s.turns) {
+      const R = t.reuse;
+      const key = chainOf(t);
+      // Walked in turn order, exactly as the plugin builds its chains, so `p` is
+      // the turn this one is the continuation of — which is not always the turn
+      // the log diffed it against.
+      const p0 = chain.get(key);
+      const p = p0 && sameChain(p0, t) ? p0 : null;
+      chain.set(key, t);
+      if (!R) continue;
+      if (!p) {
+        // Nothing to compare it to: the first turn of this conversation. The log
+        // diffed it against a neighbour from another one — opencode's `title`
+        // agent runs on the session's own id — and everything came out diverged
+        // at message #0, with the user's own message reading as new.
+        Object.defineProperty(t, '_reuseLogged', { value: R, enumerable: false });
+        t.reuse = undefined;
+        continue;
+      }
+      const b = fingerprint(t), a = fingerprint(p);
+      if (!a || !b) continue;
+      // The border is drawn on the plugin's own numbering — `prompt.messages`,
+      // which is what the screen numbers the rows by and what the token split
+      // below is indexed on. Reading the body a different way than the plugin
+      // did would move the border to the wrong row, so unless both sides agree
+      // on how many messages there are, the log stands.
+      if (counted(t) !== b.messages.length || counted(p) !== a.messages.length) continue;
+      let stable = 0;
+      while (stable < a.messages.length && stable < b.messages.length
+             && a.messages[stable] === b.messages[stable]) stable++;
+      const sysChanged = a.system !== b.system, toolsChanged = a.tools !== b.tools;
+      if (stable === R.stable_messages && sysChanged === !!R.system_changed
+          && toolsChanged === !!R.tools_changed && p.turn === R.previous_turn) continue;
+      // The per-message tokens are the provider's total split by characters —
+      // the same split the plugin used for `resent_tokens`/`new_tokens`, so the
+      // two sides of the border keep adding up to the prompt.
+      const pieces = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
+      const sum = (from, to, f) => pieces.slice(from, to).reduce((x, p) => x + (p[f] ?? 0), 0);
+      Object.defineProperty(t, '_reuseLogged', { value: R, enumerable: false });
+      t.reuse = {
+        ...R,
+        previous_turn: p.turn,
+        system_changed: sysChanged,
+        tools_changed: toolsChanged,
+        stable_messages: stable,
+        changed_at: stable < a.messages.length ? stable : null,
+        added_messages: b.messages.length - stable,
+        dropped_messages: Math.max(0, a.messages.length - stable),
+        prefix_stable: !sysChanged && !toolsChanged && stable >= a.messages.length,
+        resent_chars: sum(0, stable, 'chars'),
+        new_chars: sum(stable, undefined, 'chars'),
+        resent_tokens: sum(0, stable, 'tokens'),
+        new_tokens: sum(stable, undefined, 'tokens'),
+        recomputed: true,
+      };
+    }
+  }
 }
 
 /** The front stretch of this prompt that is byte for byte the previous prompt.
@@ -2437,8 +2601,12 @@ function renderConversation(t) {
   const c = ctxStats(t);
   // The plugin says exactly how far the prefix is identical; without it, all
   // that is left is comparing message counts with the previous turn.
-  const prev = turns().find(x => x.turn === t.turn - 1);
-  const prevLen = t.reuse ? t.reuse.stable_messages : (prev ? ctxStats(prev).messages.length : 0);
+  const prev = turns().find(x => x.turn === t.turn - 1 && sameChain(x, t));
+  // Every number below — the border, the token label, the `#` on the card — is
+  // the plugin's, so the count it falls back to has to be the plugin's too.
+  const prevLen = t.reuse ? t.reuse.stable_messages
+    : prev ? (counted(prev) ?? ctxStats(prev).messages.length) : 0;
+  const num = i => c.base ? c.base[i] : i;
   const exact = !!t.reuse;
   const msgTokens = composition(t).groups.find(g => g.key === 'messages')?.pieces ?? [];
 
@@ -2459,8 +2627,10 @@ function renderConversation(t) {
   // three can never disagree. Marking it apart from the tool results is what says
   // the model is answering a person here, and not itself.
   const promptAt = pedidos(session()).byTurn.get(t.turn)?.first === t.turn ? promptIndex(t) : -1;
-  c.messages.forEach((m, i) =>
-    wrap.append(messageCard(m, i, i >= prevLen && (exact || prevLen > 0), msgTokens[i]?.tokens, i === promptAt)));
+  c.messages.forEach((m, i) => {
+    const j = num(i);
+    wrap.append(messageCard(m, j, j >= prevLen && (exact || prevLen > 0), msgTokens[j]?.tokens, i === promptAt));
+  });
 
   // reconstructed reply
   const r = rebuild(t);
@@ -2684,6 +2854,8 @@ function cachePanel(t) {
     `<span class="lead" style="color:${col}">${V.glyph} ${esc(V.label)}</span>
      <span class="chip">${esc(A.reason)}</span>
      ${R ? `<span class="chip">vs. turn ${R.previous_turn}</span>` : ''}
+     ${!R && t._reuseLogged ? '<span class="chip" title="the log diffed this turn against a turn of another conversation — another agent, model or dialect — and everything came out diverged at message #0; there is nothing here to compare it to">first turn of this conversation</span>' : ''}
+     ${R?.recomputed ? '<span class="chip" title="the log counted the rolling cache marker and the billing header as changes; this diff was redone over the body, which ignores both">diff redone over the body</span>' : ''}
      ${R ? `<span class="chip cyan">${nf(R.stable_messages)} identical msg${R.stable_messages === 1 ? '' : 's'} · ${nf(resent)} tk resent</span>` : ''}
      ${R ? `<span class="chip green">${nf(R.added_messages)} new msg${R.added_messages === 1 ? '' : 's'} · ${nf(fresh)} tk</span>` : ''}
      ${R?.dropped_messages ? `<span class="chip red">${nf(R.dropped_messages)} msg(s) gone</span>` : ''}
