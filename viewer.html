@@ -324,12 +324,15 @@ const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : n
 /** GitHub Copilot bills in credits, and one credit is one US cent. The prices
  *  in the table below are credits per 1M tokens. */
 const CREDIT_USD = 0.01;
-/** Money. Below one cent it shows four decimals instead of "$0.00": now that
- *  cost applies to any provider, and not only to Copilot credits, a short
- *  session fits entirely inside the rounding. */
+/** Money. Under a dollar it shows four decimals rather than two, because that is
+ *  where these sessions live: at two decimals a session that cost $0.057 reads
+ *  as $0.06 and a turn that cost $0.034 reads as $0.03 — a rounding worth more
+ *  than a tenth of the number it is rounding. The tables already ask for four;
+ *  the cut-off used to be a cent, which left the whole range between a cent and
+ *  a dollar to the coarse form and made the sidebar disagree with them. */
 const money = (n, d) => n == null ? '\u2014'
   : '$' + n.toLocaleString('en-US', (() => {
-      const c = d ?? (n > 0 && n < 0.01 ? 4 : 2);
+      const c = d ?? (n > 0 && n < 1 ? 4 : 2);
       return { minimumFractionDigits: c, maximumFractionDigits: c };
     })());
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
