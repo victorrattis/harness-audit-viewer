@@ -2776,8 +2776,7 @@ function renderConversation(t) {
     const falhou = (st != null && st >= 400) || t.error;
     body.append(el('div', falhou ? 'notebox' : 'empty', falhou
       ? `<b>The request failed${st != null ? ` with HTTP ${st}` : ''}:</b> ` +
-        esc(errMessage(t) || 'the provider returned no body at all.') +
-        ' There is no reply to show; the turn stays in the log because the request did go out.'
+        esc(errMessage(t) || 'the provider returned no body at all.')
       : 'No content blocks in the reply.'));
   }
   r.blocks.forEach(b => body.append(renderBlock(b)));
