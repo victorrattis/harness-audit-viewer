@@ -2489,10 +2489,15 @@ function renderOverview() {
   wrap.append(renderFerramentas(tot2.ferramentas));
 
   // per-turn table
+  // The cost column exists only where there is a rate to apply: in a session
+  // with none, the table looks exactly as it always did. Same condition the
+  // by-model tables further down use, so the two never disagree.
+  const comCusto = !!tot2.copilot_turns;
   const tbl = el('table');
+  const NCOL = comCusto ? 13 : 12;
   tbl.innerHTML = `<thead><tr><th>#</th><th>Model</th><th>Action</th>
       <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
-      <th class="v">Total</th><th class="v">Prefix</th><th class="v">1st token</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
+      <th class="v">Total</th>${comCusto ? '<th class="v">Cost</th>' : ''}<th class="v">Prefix</th><th class="v">1st token</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
   const tb = el('tbody');
   // The turns grouped by what the user asked for. One request becomes several
   // turns — every tool call is another trip to the model — and it is the request,
@@ -2522,7 +2527,7 @@ function renderOverview() {
             gatilho ? ` — ${esc(gatilho)}` : ''}">⚡ context compacted</b> · <b>compacted</b>${
             gatilho ? ` · ${esc(gatilho)}` : ' · trigger not recorded'}`
         : `<b class="ask">❯ ${esc(plain(p.text).slice(0, 120))}</b> · <b>request #${p.n}</b>`;
-      sep.innerHTML = `<td colspan="12" title="${esc(p.text)}">${cabeca} · ${
+      sep.innerHTML = `<td colspan="${NCOL}" title="${esc(p.text)}">${cabeca} · ${
         doPedido.length} turn(s) · ${nf(tk)} tk${
         cst != null ? ` · <b${fora ? ` title="${fora} turn(s) with no rate: they count in the tokens, not in the cost"` : ''
           }>${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
@@ -2530,6 +2535,11 @@ function renderOverview() {
     }
     const u = t.usage ?? {};
     const st = t.response?.status; const ok = !falhou(t);
+    // What this one trip to the model cost. The band above sums it per request,
+    // which is the unit a person asks for; this is the unit that answers why one
+    // request came out dearer than another — a long tail resent, a cache write
+    // redone — and it is the same money, turn by turn.
+    const cst = custo(t), furos = furosDe(t);
     const tr = el('tr');
     tr.style.cursor = 'pointer';
     tr.innerHTML = `<td class="k">#${t.turn}${isSub(t)
@@ -2550,6 +2560,11 @@ function renderOverview() {
       <td class="v" style="color:var(--purple)">${nfOpt(u.output)}</td>
       <td class="v"${mismatch(u) ? ` title="the provider reported ${nf(u.details.reported_total)} tokens on this turn, ${nf(Math.abs(mismatch(u)))} ${mismatch(u) > 0 ? 'more' : 'fewer'}: there is a counter the plugin is not reading"` : ''}><b>${
         nfOpt(u.total)}</b>${mismatch(u) ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
+      ${comCusto ? `<td class="v"${furos.length
+          ? ` title="rate borrowed for ${esc(furos.join(', '))}: the catalog recorded zero on this turn while there were tokens of that kind to bill"`
+          : semPreco(t) ? ' title="no rate on this turn and none in the credit table: its tokens count, its cost does not"' : ''}>${
+        cst != null ? money(cst, 4) : '<span style="color:var(--faint)">—</span>'}${
+        furos.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
           ? '<span style="color:var(--green)">stable</span>'
           : '<span style="color:var(--red)">broke</span>') : '<span style="color:var(--faint)">—</span>'}</td>
@@ -2580,9 +2595,6 @@ function renderOverview() {
   for (const [title, data, deco] of tabelas) {
     if (!data || !Object.keys(data).length) continue;
     const bt = el('table');
-    // The cost column only exists where there is a price to apply: in a session
-    // with no rate at all the table looks exactly as it always did.
-    const comCusto = !!tot2.copilot_turns;
     bt.innerHTML = `<thead><tr><th>${esc(title.replace('By ', ''))}</th><th class="num">Turns</th>
       <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th><th class="num">Output</th>
       <th class="num">Total</th><th class="num">Cache</th>${
