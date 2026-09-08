@@ -2695,8 +2695,6 @@ function renderOverview() {
       + '.'));
   }
 
-  wrap.append(renderFerramentas(tot2.ferramentas));
-
   // per-turn table
   // The cost column exists only where there is a rate to apply: in a session
   // with none, the table looks exactly as it always did. Same condition the
@@ -2798,6 +2796,10 @@ function renderOverview() {
   // same turn read against this session and against everyone else's answers two
   // different questions.
   if (comCusto) wrap.append(reguaFaixas(refs, s.turns));
+
+  // Where the context is going, by tool. It comes after the turn-by-turn table,
+  // which is what a session is opened to read, and before the by-model totals.
+  wrap.append(renderFerramentas(tot2.ferramentas));
 
   // Tokens from different models are neither the same money nor the same problem.
   const nomeSessao = name => esc(name) + (subs.has(name)
