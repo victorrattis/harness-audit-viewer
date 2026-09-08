@@ -313,7 +313,10 @@ const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupD
             reload: null,
             // Scope of the sidebar list: 'all', 'root' (the main conversation only) or the
             // id of a subagent; `collapsed` holds the folded groups.
-            scope: 'all', collapsed: new Set() };
+            scope: 'all', collapsed: new Set(),
+            // What the cost band measures against: 'session' (the median turn of
+            // the same model here) or 'world' (the published average per call).
+            bandRef: 'session' };
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -425,11 +428,14 @@ function copilotRates(t) {
    =========================================================================
  *  Two sources, in this order.
  *
- *  The first is the turn itself: since v2 the plugin records `rates_per_million`,
- *  the rate opencode's model catalog gave for that model at the instant the
- *  request went out. It is the provider's rate, it holds for all of them, and it
- *  does not go stale because it is a fact of that moment — not a table of ours
- *  trying to keep up with the market.
+ *  The first is the turn itself, under either of the two names the harnesses
+ *  write it: `rates_per_million` from the opencode plugin, `cost.per_million`
+ *  from the Claude Code reader. They are the same fact — the rate the catalog
+ *  gave for that model at the instant the request went out. It is the provider's
+ *  rate, it holds for all of them, and it does not go stale because it is a fact
+ *  of that moment — not a table of ours trying to keep up with the market. Only
+ *  the first name was read here for a while, and every Claude Code log came out
+ *  with no cost at all: not a wrong number, the whole Cost column missing.
  *
  *  The second is the Copilot credit table, still here because the money there is
  *  a different money: what leaves the plan's allowance is the resale price, not
@@ -460,7 +466,7 @@ function tarifas(t) {
 
 function calcTarifas(t) {
   const u = t.usage; if (!u) return null;
-  const r = t.rates_per_million;
+  const r = t.rates_per_million ?? t.cost?.per_million;
   const cred = copilotRates(t);
   if (!r && !cred) return null;
   const rates = {}, furos = [];
@@ -476,17 +482,49 @@ function calcTarifas(t) {
     if (alt > 0) { rates[f] = alt; furos.push(f); }
     else rates[f] = v ?? 0;
   }
-  return { rates, furos, base: r ? 'opencode catalog' : 'Copilot credits' };
+  return {
+    rates, furos,
+    base: t.rates_per_million ? 'opencode catalog'
+        : t.cost?.per_million ? 'llm-audit prices.json'
+        : 'Copilot credits',
+  };
+}
+
+/** What each part of the turn cost, in dollars. `reasoning` is not a part of its
+ *  own: it is already inside `output`.
+ *
+ *  Anthropic bills a one-hour cache write at twice the input rate, where the
+ *  catalog's `cache_write` is the five-minute price — the same rule `price()` in
+ *  llm-audit's `core.ts` applies when it records the turn. Without it a session
+ *  that writes its cache with the 1h TTL reads about a third under the bill. A
+ *  provider that does not split the TTL reports no such detail, `long` is zero,
+ *  and nothing changes. */
+function componentes(t) {
+  const x = tarifas(t); if (!x) return null;
+  const u = t.usage, r = x.rates;
+  const long = u.details?.cache_write_1h ?? 0;
+  const short = Math.max(0, (u.cache_write ?? 0) - long);
+  return {
+    input: (u.input ?? 0) * r.input / 1e6,
+    cache_read: (u.cache_read ?? 0) * r.cache_read / 1e6,
+    cache_write: (short * r.cache_write + long * r.input * 2) / 1e6,
+    output: (u.output ?? 0) * r.output / 1e6,
+  };
 }
 
 function custo(t) {
-  const x = tarifas(t); if (!x) return null;
-  const u = t.usage, r = x.rates;
-  // `reasoning` is not added in: it is already inside `output`.
-  return ((u.input ?? 0) * r.input
-        + (u.cache_read ?? 0) * r.cache_read
-        + (u.cache_write ?? 0) * r.cache_write
-        + (u.output ?? 0) * r.output) / 1e6;
+  const p = componentes(t); if (!p) return null;
+  return p.input + p.cache_read + p.cache_write + p.output;
+}
+
+/** Which part paid for most of this turn. It is what turns a band into something
+ *  to act on: a turn that is dear because it wrote the whole cache again and one
+ *  that is dear because it thought for ten thousand tokens are not the same
+ *  problem, and only the second one bought anything. */
+function driverDe(t) {
+  const p = componentes(t); if (!p) return null;
+  const top = Object.keys(p).reduce((a, k) => p[k] > p[a] ? k : a);
+  return p[top] > 0 ? top : null;
 }
 
 /** A turn with tokens that stayed out of the total because there was no rate at
@@ -497,6 +535,125 @@ const semPreco = t => !!t.usage?.total && tarifas(t) == null;
 
 /** Components this turn paid for with a borrowed rate. */
 const furosDe = t => tarifas(t)?.furos ?? [];
+
+/* =========================================================================
+   How much is much
+   =========================================================================
+ *  A figure in dollars says nothing on its own: $0.35 is an ordinary turn late
+ *  in a long conversation and a fortune early in a short one. The band is that
+ *  figure against a reference, on one scale — under half of it, up to twice it,
+ *  up to five times it, and past that.
+ *
+ *  Two references, the same multipliers on both, so the reading changes meaning
+ *  without changing shape:
+ *
+ *    session — the median turn of that same model, here. Answers "this turn
+ *              stands out from the rest of what I did in this session". Per
+ *              model for the reason `By model` is a table of its own: the title
+ *              agent runs on a small model and cannot be held to the big one's
+ *              ruler.
+ *    world   — $0.11, the average cost of one LLM step across ~350k real steps
+ *              of Claude Code and Codex (TraceLab, arXiv 2606.30560). Answers
+ *              "this whole session is dear compared with everyone else's". It is
+ *              a measurement someone else took over other people's work, not a
+ *              threshold picked in here.
+ *
+ *  The two land in nearly the same place on the logs this was written against —
+ *  848 turns whose median came to $0.1142, 4% off the published average — and
+ *  that agreement is the only reason to trust either of them. */
+const BANDS = [
+  { id: 'low',     label: 'low',     ate: 0.5,      chip: 'chip green' },
+  { id: 'mid',     label: 'mid',     ate: 2,        chip: 'chip' },
+  { id: 'high',    label: 'high',    ate: 5,        chip: 'chip orange' },
+  { id: 'extreme', label: 'extreme', ate: Infinity, chip: 'chip red solid' },
+];
+const REF_STEP_USD = 0.11;
+/** And what one whole user request costs there — the several turns a single
+ *  thing you asked for takes, which is the unit the request rows sum. Median in
+ *  the same trace: $0.33. */
+const REF_REQUEST_USD = 1.01;
+const REF_SESSION_USD = 9.70;
+/** Under this many priced turns there is no median to speak of, and the band
+ *  would be measuring a turn against itself. Those rows say "—" and why. */
+const BAND_MIN_TURNS = 5;
+
+/** The median priced turn of each model, for the `session` reference. Models
+ *  with too few turns are left out rather than given a median of two. */
+function medianasPorModelo(turns) {
+  const por = new Map();
+  for (const t of turns) {
+    const c = custo(t); if (c == null) continue;
+    const k = t.model ?? '?';
+    if (!por.has(k)) por.set(k, []);
+    por.get(k).push(c);
+  }
+  const out = new Map();
+  for (const [k, cs] of por) if (cs.length >= BAND_MIN_TURNS) out.set(k, mediana(cs));
+  return out;
+}
+
+/** A multiple, written so it stays readable at both ends: "19.2x" up close, and
+ *  "1/220 of" for a turn that cost a fraction of the reference — where "0.0x",
+ *  which is what a plain toFixed(1) gives there, is no number at all. */
+const vezes = r => !(r > 0) ? '0x'
+  : r >= 0.1 ? `${r >= 10 ? r.toFixed(0) : r.toFixed(1)}x`
+  : `1/${Math.round(1 / r)} of`;
+
+/** This turn's band, or `null` when there is nothing to measure it against. */
+function faixa(t, refs) {
+  const cost = custo(t); if (cost == null) return null;
+  const ref = S.bandRef === 'world' ? REF_STEP_USD : refs.get(t.model ?? '?');
+  if (!ref) return null;
+  const ratio = cost / ref;
+  return { band: BANDS.find(b => ratio < b.ate) ?? BANDS[BANDS.length - 1], ratio, ref, cost };
+}
+
+/** The band chip for one row, with both readings in the tooltip. The local one
+ *  says whether this turn stands out here; the outside one says whether "here"
+ *  is itself dear — and a figure without the second has no scale. The driver is
+ *  the part that answers why, which is the whole point of colouring the row. */
+function celulaFaixa(t, refs) {
+  const f = faixa(t, refs);
+  if (!f) {
+    const porque = custo(t) != null
+      ? `fewer than ${BAND_MIN_TURNS} priced turns on ${t.model ?? 'this model'} in this session: no median to measure against`
+      // Two different silences, and calling both "no rate" would misread the
+      // second: a refused or unanswered turn has no token count to price at all.
+      : t.usage?.total ? 'no rate on this turn: its tokens count, its cost does not'
+      : 'no token count on this turn: there is nothing to price';
+    return `<span style="color:var(--faint)" title="${esc(porque)}">—</span>`;
+  }
+  const local = refs.get(t.model ?? '?');
+  const drv = driverDe(t);
+  const diz = [money(f.cost, 4)];
+  if (local) diz.push(`${vezes(f.cost / local)} the median turn for ${t.model ?? '?'} in this session (${money(local, 4)})`);
+  diz.push(`${vezes(f.cost / REF_STEP_USD)} the ${money(REF_STEP_USD, 2)} an average call costs across ~350k real coding-agent steps (TraceLab)`);
+  if (drv) diz.push(`${drv} is what paid for it`);
+  return `<span class="${f.band.chip}" title="${esc(diz.join(' · '))}">${f.band.label}</span>`;
+}
+
+/** The ruler, printed under the table, with the swap between the two
+ *  references. Whichever one is in effect, the note names the other: a reader
+ *  who does not know what the colours are measured against cannot use them. */
+function reguaFaixas(refs) {
+  const alvo = S.bandRef === 'session' ? 'world' : 'session';
+  // Named with its number when the session ran on a single model, which is the
+  // common case; with several, the tooltip on each row carries its own.
+  const unico = refs.size === 1 ? [...refs.values()][0] : null;
+  const contra = S.bandRef === 'session'
+    ? `<b>the median turn of the same model in this session</b>${unico != null ? ` (${money(unico, 4)})` : ''}`
+    : `<b>${money(REF_STEP_USD, 2)} a call</b>`;
+  const e = el('div', 'foot');
+  e.innerHTML = 'Band: <b>low</b> under 0.5x · <b>mid</b> 0.5–2x · <b>high</b> 2–5x · '
+    + '<b>extreme</b> 5x and over — against ' + contra + '. '
+    + `<a href="#" data-band-ref>Measure against ${alvo === 'world' ? money(REF_STEP_USD, 2) + ' a call' : 'this session'} instead.</a><br>`
+    + `${money(REF_STEP_USD, 2)} is what one call to the model costs on average across ~350k real Claude Code and Codex steps `
+    + '(<a href="https://arxiv.org/abs/2606.30560" target="_blank" rel="noopener">TraceLab</a>). '
+    + `For scale, in the same trace one whole user request averages ${money(REF_REQUEST_USD, 2)} and one session ${money(REF_SESSION_USD, 2)}; `
+    + 'Anthropic reports about $13 per developer per active day.';
+  e.querySelector('[data-band-ref]').onclick = ev => { ev.preventDefault(); S.bandRef = alvo; render(); };
+  return e;
+}
 
 /** Where this session's cost came from, so the screen can name the currency.
  *  When both sources show up in the same session the name says both: adding
@@ -2494,10 +2651,14 @@ function renderOverview() {
   // by-model tables further down use, so the two never disagree.
   const comCusto = !!tot2.copilot_turns;
   const tbl = el('table');
-  const NCOL = comCusto ? 13 : 12;
+  const NCOL = comCusto ? 13 : 11;
   tbl.innerHTML = `<thead><tr><th>#</th><th>Model</th><th>Action</th>
       <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
-      <th class="v">Total</th>${comCusto ? '<th class="v">Cost</th>' : ''}<th class="v">Prefix</th><th class="v">1st token</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
+      <th class="v">Total</th>${comCusto ? '<th class="v">Cost</th><th class="v">Band</th>' : ''
+      }<th class="v">Prefix</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
+  // The reference the band on each row is measured against, taken once over the
+  // whole session rather than per row.
+  const refs = medianasPorModelo(s.turns);
   const tb = el('tbody');
   // The turns grouped by what the user asked for. One request becomes several
   // turns — every tool call is another trip to the model — and it is the request,
@@ -2529,8 +2690,10 @@ function renderOverview() {
         : `<b class="ask">❯ ${esc(plain(p.text).slice(0, 120))}</b> · <b>request #${p.n}</b>`;
       sep.innerHTML = `<td colspan="${NCOL}" title="${esc(p.text)}">${cabeca} · ${
         doPedido.length} turn(s) · ${nf(tk)} tk${
-        cst != null ? ` · <b${fora ? ` title="${fora} turn(s) with no rate: they count in the tokens, not in the cost"` : ''
-          }>${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
+        cst != null ? ` · <b title="${esc(
+            `${vezes(cst / REF_REQUEST_USD)} the ${money(REF_REQUEST_USD, 2)} an average user request costs across ~350k real coding-agent steps (TraceLab; ${money(0.33, 2)} median)`
+            + (fora ? ` — ${fora} turn(s) with no rate: they count in the tokens, not in the cost` : ''))
+          }">${money(cst, 4)}${fora ? ' *' : ''}</b>` : ''}</td>`;
       tb.append(sep);
     }
     const u = t.usage ?? {};
@@ -2564,12 +2727,11 @@ function renderOverview() {
           ? ` title="rate borrowed for ${esc(furos.join(', '))}: the catalog recorded zero on this turn while there were tokens of that kind to bill"`
           : semPreco(t) ? ' title="no rate on this turn and none in the credit table: its tokens count, its cost does not"' : ''}>${
         cst != null ? money(cst, 4) : '<span style="color:var(--faint)">—</span>'}${
-        furos.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}
+        furos.length ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
+      <td class="v">${celulaFaixa(t, refs)}</td>` : ''}
       <td class="v">${t.reuse ? (t.reuse.prefix_stable
           ? '<span style="color:var(--green)">stable</span>'
           : '<span style="color:var(--red)">broke</span>') : '<span style="color:var(--faint)">—</span>'}</td>
-      <td class="v"${t.timing ? ` title="1st byte ${t.timing.first_byte_ms}ms · stream ${t.timing.stream_ms}ms · ${t.timing.chunks} frames"` : ''}>${
-        t.timing?.first_token_ms != null ? t.timing.first_token_ms + 'ms' : '<span style="color:var(--faint)">—</span>'}</td>
       <td class="v">${secs(t.elapsed_seconds)}</td>
       <td class="v" style="color:${t.incomplete ? 'var(--yellow)' : ok ? 'var(--green)' : 'var(--red)'}">${
         t.incomplete ? 'incomplete' : (st ?? (t.error ? 'failed' : esc(t.response?.stop_reason ?? '—')))}</td>`;
@@ -2579,6 +2741,11 @@ function renderOverview() {
   tbl.append(tb);
   const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
   wrap.append(el('h3', null, 'Turns'), card);
+  // A band with no ruler printed beside it is just a colour. The note says what
+  // the multiples are measured against, and lets the reference be swapped: the
+  // same turn read against this session and against everyone else's answers two
+  // different questions.
+  if (comCusto) wrap.append(reguaFaixas(refs));
 
   // Tokens from different models are neither the same money nor the same problem.
   const nomeSessao = name => esc(name) + (subs.has(name)
