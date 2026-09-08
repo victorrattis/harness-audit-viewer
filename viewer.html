@@ -314,9 +314,12 @@ const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupD
             // Scope of the sidebar list: 'all', 'root' (the main conversation only) or the
             // id of a subagent; `collapsed` holds the folded groups.
             scope: 'all', collapsed: new Set(),
-            // What the cost band measures against: 'session' (the median turn of
-            // the same model here) or 'world' (the published average per call).
-            bandRef: 'session' };
+            // What the cost band measures against: 'model' (the typical turn at
+            // this model's price), 'session' (the median turn of the same model
+            // here) or 'world' (the published average per call). 'model' starts
+            // because it is the only one that needs no session history: the
+            // other two leave a column of "—" on a session that changes models.
+            bandRef: 'model' };
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -541,12 +544,17 @@ const furosDe = t => tarifas(t)?.furos ?? [];
    =========================================================================
  *  A figure in dollars says nothing on its own: $0.35 is an ordinary turn late
  *  in a long conversation and a fortune early in a short one. The band is that
- *  figure against a reference, on one scale — under half of it, up to twice it,
- *  up to five times it, and past that.
+ *  figure against a reference, on one scale — cheaper than the reference, up to
+ *  three times it, up to ten times it, and past that.
  *
- *  Two references, the same multipliers on both, so the reading changes meaning
- *  without changing shape:
+ *  Three references, the same multipliers on all of them, so the reading changes
+ *  meaning without changing shape:
  *
+ *    model   — the typical turn *at this model's price*: its input rate times
+ *              the median turn below. Answers "this turn is dear for the model
+ *              it ran on". The only one that needs neither a session history nor
+ *              a table of our own, so it is the one that still says something on
+ *              the first turn of a session, and on a model seen once.
  *    session — the median turn of that same model, here. Answers "this turn
  *              stands out from the rest of what I did in this session". Per
  *              model for the reason `By model` is a table of its own: the title
@@ -558,16 +566,34 @@ const furosDe = t => tarifas(t)?.furos ?? [];
  *              a measurement someone else took over other people's work, not a
  *              threshold picked in here.
  *
- *  The two land in nearly the same place on the logs this was written against —
- *  848 turns whose median came to $0.1142, 4% off the published average — and
- *  that agreement is the only reason to trust either of them. */
+ *  The three land in nearly the same place on the logs this was written against —
+ *  848 turns whose median came to $0.1142, 4% off the published average, and
+ *  $0.1145 off the model reference — and that agreement is the only reason to
+ *  trust any of them.
+ *
+ *  The multipliers were 0.5 / 2 / 5, which painted 62 of those 848 turns orange:
+ *  one row in fourteen, which is no longer a warning. At 1 / 3 / 10 the same
+ *  trace gives 10 `high` and 2 `extreme`, and the boundaries fall on money worth
+ *  reading — $0.34 and $1.15 for a single call on Opus 5. */
 const BANDS = [
-  { id: 'low',     label: 'low',     ate: 0.5,      chip: 'chip green' },
-  { id: 'mid',     label: 'mid',     ate: 2,        chip: 'chip' },
-  { id: 'high',    label: 'high',    ate: 5,        chip: 'chip orange' },
+  { id: 'low',     label: 'low',     ate: 1,        chip: 'chip green' },
+  { id: 'mid',     label: 'mid',     ate: 3,        chip: 'chip' },
+  { id: 'high',    label: 'high',    ate: 10,       chip: 'chip orange' },
   { id: 'extreme', label: 'extreme', ate: Infinity, chip: 'chip red solid' },
 ];
 const REF_STEP_USD = 0.11;
+/** The same median turn, with the model divided out: its cost over its model's
+ *  input rate, in millions of input-equivalent tokens. That division is what
+ *  makes one number serve every model — the other three rates are fixed
+ *  multiples of the input one (output 5x, cache read 0.1x, cache write 1.25x),
+ *  so the whole bill scales with it.
+ *
+ *  Multiplied back out it reproduces the two references above: 5 x 0.0229 =
+ *  $0.1145 on Opus 5, against $0.11 published and $0.1142 measured. So this is
+ *  not a fourth threshold, it is `REF_STEP_USD` carried to models the published
+ *  average never priced — the $0.20/MTok ones, where $0.11 a call is two dozen
+ *  typical turns and every row would read `low`. */
+const REF_TURN_MTOK = 0.0229;
 /** And what one whole user request costs there — the several turns a single
  *  thing you asked for takes, which is the unit the request rows sum. Median in
  *  the same trace: $0.33. */
@@ -599,10 +625,18 @@ const vezes = r => !(r > 0) ? '0x'
   : r >= 0.1 ? `${r >= 10 ? r.toFixed(0) : r.toFixed(1)}x`
   : `1/${Math.round(1 / r)} of`;
 
+/** What the `model` reference costs for this turn: the model's own input rate,
+ *  tier already picked by `tarifas`, times the median turn in input-equivalents.
+ *  Zero for a model with no input price — a free one, or a rate the catalog
+ *  never brought — and the caller reads that as "nothing to measure against". */
+const refModelo = t => (tarifas(t)?.rates?.input ?? 0) * REF_TURN_MTOK;
+
 /** This turn's band, or `null` when there is nothing to measure it against. */
 function faixa(t, refs) {
   const cost = custo(t); if (cost == null) return null;
-  const ref = S.bandRef === 'world' ? REF_STEP_USD : refs.get(t.model ?? '?');
+  const ref = S.bandRef === 'world' ? REF_STEP_USD
+            : S.bandRef === 'model' ? refModelo(t)
+            : refs.get(t.model ?? '?');
   if (!ref) return null;
   const ratio = cost / ref;
   return { band: BANDS.find(b => ratio < b.ate) ?? BANDS[BANDS.length - 1], ratio, ref, cost };
@@ -615,40 +649,58 @@ function faixa(t, refs) {
 function celulaFaixa(t, refs) {
   const f = faixa(t, refs);
   if (!f) {
-    const porque = custo(t) != null
-      ? `fewer than ${BAND_MIN_TURNS} priced turns on ${t.model ?? 'this model'} in this session: no median to measure against`
+    const porque = custo(t) == null
       // Two different silences, and calling both "no rate" would misread the
       // second: a refused or unanswered turn has no token count to price at all.
-      : t.usage?.total ? 'no rate on this turn: its tokens count, its cost does not'
-      : 'no token count on this turn: there is nothing to price';
+      ? (t.usage?.total ? 'no rate on this turn: its tokens count, its cost does not'
+                        : 'no token count on this turn: there is nothing to price')
+      // Priced, but the reference in effect has nothing to offer this turn. Under
+      // `model` that is a model with no input price of its own — a free one, or
+      // one the catalog never brought a rate for.
+      : S.bandRef === 'model'
+      ? `no input price for ${t.model ?? 'this model'}: there is no typical turn at its price to measure against`
+      : `fewer than ${BAND_MIN_TURNS} priced turns on ${t.model ?? 'this model'} in this session: no median to measure against`;
     return `<span style="color:var(--faint)" title="${esc(porque)}">—</span>`;
   }
   const local = refs.get(t.model ?? '?');
+  const porPreco = refModelo(t);
   const drv = driverDe(t);
   const diz = [money(f.cost, 4)];
+  if (porPreco) diz.push(`${vezes(f.cost / porPreco)} a typical turn at ${t.model ?? '?'} prices (${money(porPreco, 4)})`);
   if (local) diz.push(`${vezes(f.cost / local)} the median turn for ${t.model ?? '?'} in this session (${money(local, 4)})`);
   diz.push(`${vezes(f.cost / REF_STEP_USD)} the ${money(REF_STEP_USD, 2)} an average call costs across ~350k real coding-agent steps (TraceLab)`);
   if (drv) diz.push(`${drv} is what paid for it`);
   return `<span class="${f.band.chip}" title="${esc(diz.join(' · '))}">${f.band.label}</span>`;
 }
 
-/** The ruler, printed under the table, with the swap between the two
- *  references. Whichever one is in effect, the note names the other: a reader
- *  who does not know what the colours are measured against cannot use them. */
-function reguaFaixas(refs) {
-  const alvo = S.bandRef === 'session' ? 'world' : 'session';
+/** The ruler, printed under the table, with the step through the three
+ *  references. Whichever one is in effect, the note names it and the next one: a
+ *  reader who does not know what the colours are measured against cannot use
+ *  them, and with three there is no "the other" to leave implicit. */
+function reguaFaixas(refs, turns) {
+  // Three references now, so the link cycles rather than swaps.
+  const CICLO = { model: 'session', session: 'world', world: 'model' };
+  const alvo = CICLO[S.bandRef] ?? 'model';
+  const NOME = { model: 'each model’s own price', session: 'this session', world: money(REF_STEP_USD, 2) + ' a call' };
   // Named with its number when the session ran on a single model, which is the
   // common case; with several, the tooltip on each row carries its own.
   const unico = refs.size === 1 ? [...refs.values()][0] : null;
-  const contra = S.bandRef === 'session'
+  // The `model` reference is per turn, not per session, so it has a single
+  // number to show only when every priced turn here agreed on one.
+  const precos = [...new Set((turns ?? []).map(t => refModelo(t)).filter(Boolean))];
+  const contra = S.bandRef === 'model'
+    ? `<b>a typical turn at the model’s own price</b>${precos.length === 1 ? ` (${money(precos[0], 4)})` : ''}`
+    : S.bandRef === 'session'
     ? `<b>the median turn of the same model in this session</b>${unico != null ? ` (${money(unico, 4)})` : ''}`
     : `<b>${money(REF_STEP_USD, 2)} a call</b>`;
   const e = el('div', 'foot');
-  e.innerHTML = 'Band: <b>low</b> under 0.5x · <b>mid</b> 0.5–2x · <b>high</b> 2–5x · '
-    + '<b>extreme</b> 5x and over — against ' + contra + '. '
-    + `<a href="#" data-band-ref>Measure against ${alvo === 'world' ? money(REF_STEP_USD, 2) + ' a call' : 'this session'} instead.</a><br>`
+  e.innerHTML = 'Band: <b>low</b> under 1x · <b>mid</b> 1–3x · <b>high</b> 3–10x · '
+    + '<b>extreme</b> 10x and over — against ' + contra + '. '
+    + `<a href="#" data-band-ref>Measure against ${NOME[alvo]} instead.</a><br>`
     + `${money(REF_STEP_USD, 2)} is what one call to the model costs on average across ~350k real Claude Code and Codex steps `
-    + '(<a href="https://arxiv.org/abs/2606.30560" target="_blank" rel="noopener">TraceLab</a>). '
+    + '(<a href="https://arxiv.org/abs/2606.30560" target="_blank" rel="noopener">TraceLab</a>); '
+    + 'the per-model reference is that same call with the model divided out — its input rate times '
+    + `${(REF_TURN_MTOK * 1000).toFixed(1)}k input-equivalent tokens — so a model priced at a fifth carries a fifth of the ruler. `
     + `For scale, in the same trace one whole user request averages ${money(REF_REQUEST_USD, 2)} and one session ${money(REF_SESSION_USD, 2)}; `
     + 'Anthropic reports about $13 per developer per active day.';
   e.querySelector('[data-band-ref]').onclick = ev => { ev.preventDefault(); S.bandRef = alvo; render(); };
@@ -2745,7 +2797,7 @@ function renderOverview() {
   // the multiples are measured against, and lets the reference be swapped: the
   // same turn read against this session and against everyone else's answers two
   // different questions.
-  if (comCusto) wrap.append(reguaFaixas(refs));
+  if (comCusto) wrap.append(reguaFaixas(refs, s.turns));
 
   // Tokens from different models are neither the same money nor the same problem.
   const nomeSessao = name => esc(name) + (subs.has(name)
