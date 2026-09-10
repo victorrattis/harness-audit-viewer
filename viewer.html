@@ -98,6 +98,11 @@ header .grow{flex:1}
 .chip.red{color:var(--red)} .chip.purple{color:var(--purple)} .chip.cyan{color:var(--cyan)}
 .chip.orange{color:var(--orange)}
 .chip.solid{background:color-mix(in srgb,currentColor 18%,transparent)}
+/* A chip carrying a name someone else chose — a project directory, a worktree
+   branch — cannot be allowed to set the width of the column it sits in. The
+   whole value stays in the title. */
+.chip.trunc{display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;vertical-align:middle}
 
 /* ---------- turn header ---------- */
 .thead{margin-bottom:16px}
@@ -219,6 +224,24 @@ td.wrap{word-break:break-word;white-space:normal}
 td.num{font-family:var(--mono);text-align:right;white-space:nowrap;width:1%}
 tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--panel2)}
 .card.tablecard{overflow-x:auto}
+/* The tab bar that picks the altitude — the folder or the session — sits at the
+   very top of the content, where the 18px above it are already the padding. */
+.tabs.top{margin:0 0 16px}
+/* In the folder view the sidebar has no conversation to list, and the table wants
+   the width it was taking. */
+#main.solo{grid-template-columns:1fr}
+/* The day band in the folder table: sibling of `tr.pedido`, one level up, where
+   what it separates is a calendar day and not a request. */
+tr.dia td{background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:11px;
+  padding-top:9px;padding-bottom:5px;border-top:1px solid var(--border)}
+tr.dia b{color:var(--text)}
+tr.dia .day{color:var(--cyan)}
+/* Cost by day. The label and the figure are fixed columns so the bars start and
+   end on the same two lines — comparing them is the only thing they are for. */
+.daybar{display:grid;grid-template-columns:170px 1fr 88px;gap:12px;align-items:center;
+  font-family:var(--mono);font-size:12px;padding:5px 3px}
+.daybar .d{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.daybar .amt{text-align:right;white-space:nowrap}
 tr.broke td:first-child{box-shadow:inset 2px 0 0 var(--red)}
 /* The band that separates one user request from the next in the turns table. */
 tr.pedido td{background:var(--panel2);color:var(--muted);font-family:var(--mono);font-size:11px;
@@ -319,7 +342,13 @@ const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupD
             // here) or 'world' (the published average per call). 'model' starts
             // because it is the only one that needs no session history: the
             // other two leave a column of "—" on a session that changes models.
-            bandRef: 'model' };
+            bandRef: 'model',
+            // The folder is one level above the session: a directory holds many
+            // conversations, and the question money is actually asked in — where
+            // did the week go — is a comparison between them, which no single
+            // session can answer. 'folder' is that cross-session table;
+            // 'session' is everything that was here before it.
+            view: 'session' };
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -999,15 +1028,19 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
   // On a refresh the reading position is the whole point: the session, the turn,
   // the tab and the scroll stay where they were, so the new turns just show up.
   const prev = opts.keep
-    ? { sid: S.sid, sel: S.sel, tab: S.tab, scope: S.scope, collapsed: S.collapsed,
+    ? { sid: S.sid, sel: S.sel, tab: S.tab, scope: S.scope, collapsed: S.collapsed, view: S.view,
         side: $('#side').scrollTop, content: $('#content').scrollTop }
     : null;
   S.sessions = sessions;
   if (prev && sessions.some(s => s.id === prev.sid)) {
     S.sid = prev.sid; S.tab = prev.tab; S.scope = prev.scope; S.collapsed = prev.collapsed;
+    S.view = prev.view;
     S.sel = prev.sel === 'overview' || turns().some(t => t.turn === prev.sel) ? prev.sel : 'overview';
   } else {
     S.sid = sessions[0].id; S.sel = 'overview';
+    // With a single conversation in the folder the cross-session table would only
+    // repeat the session below it, so there is nothing there to land on.
+    S.view = sessions.length > 1 ? 'folder' : 'session';
   }
   $('#drop').hidden = true; $('#app').hidden = false;
   renderSessionSelect(); render();
@@ -2316,7 +2349,10 @@ function renderSessionSelect() {
     `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turns</option>`).join('');
   sel.value = S.sid;
   sel.onchange = () => {
-    S.sid = sel.value; S.sel = 'overview'; S.scope = 'all'; S.collapsed = new Set(); render();
+    // Picking a session up here is asking to go into it, not to keep looking at
+    // the folder that holds it.
+    S.sid = sel.value; S.view = 'session';
+    S.sel = 'overview'; S.scope = 'all'; S.collapsed = new Set(); render();
   };
 }
 
@@ -2481,8 +2517,14 @@ function turnLabel(t) {
    Render: content
    ========================================================================= */
 function render() {
-  renderSide();
   const c = $('#content'); c.innerHTML = '';
+  // The sidebar lists the turns of one conversation. In the folder view there is
+  // no such conversation picked yet, and the table wants the width back.
+  $('#main').classList.toggle('solo', S.view === 'folder');
+  $('#side').hidden = S.view === 'folder';
+  c.append(renderViewTabs());
+  if (S.view === 'folder') { c.append(renderFolderOverview()); c.scrollTop = 0; return; }
+  renderSide();
   if (S.sel === 'overview') { c.append(renderOverview()); return; }
   const t = turns().find(x => x.turn === S.sel);
   if (!t) return c.append(el('div', 'empty', 'Turn not found.'));
@@ -2555,6 +2597,336 @@ function renderFerramentas(lista) {
 }
 
 /* ---------- overview ---------- */
+/* =========================================================================
+   Render: the folder
+   =========================================================================
+ *  Until here the viewer could only look at one conversation at a time. What a
+ *  session cannot answer is the question the money is actually asked in — where
+ *  did the week go — because that answer is a comparison: this afternoon against
+ *  that one, this project against the other.
+ *
+ *  The unit of the grouping is the calendar day, because that is the unit a
+ *  person remembers having worked in. Under each day, one line per session, and
+ *  clicking it goes into the session as before. */
+
+/** When a session ran, in local time.
+ *
+ *  `started_at` is the real instant and is what the rest of the screen prints,
+ *  so it comes first. The folder name is the fallback and not the other way
+ *  round: it is already written in local time, which is what we want here, but a
+ *  session folder opened on its own may carry no prefix at all. */
+function diaDe(s) {
+  const iso = s.summary?.started_at ?? s.turns.find(t => t.started_at)?.started_at;
+  if (iso) { const d = new Date(iso); if (!isNaN(d)) return d; }
+  const m = /^(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})/.exec(s.id ?? '');
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+}
+/** The day as a key: `en-CA` is ISO-shaped, so it sorts the way it reads. */
+const chaveDia = d => d ? d.toLocaleDateString('en-CA') : '—';
+const rotuloDia = d => d ? d.toLocaleDateString('en-US',
+  { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : 'date not recorded';
+const hora = d => d ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
+/** Colour for a cache hit rate, on the same cuts the session overview uses. */
+const corCache = r => r == null ? null
+  : r > 0.9 ? 'var(--green)' : r > 0.5 ? 'var(--yellow)' : 'var(--red)';
+/** The session id without the timestamp the folder name carries in front of it —
+ *  the date is already the row's group and the time is already its first cell. */
+const semData = id => String(id ?? '').replace(/^\d{8}[_-]\d{6}-/, '') || String(id ?? '');
+
+/** One session as a line of the folder table.
+ *
+ *  Every figure here is either a field the log already carries or a sum
+ *  `buckets` already knows how to take — the same one the by-model table uses,
+ *  so the two never disagree about what a cache hit rate is.
+ *
+ *  What is deliberately not here is `cacheAudit` and `ferramentas`: they are the
+ *  expensive half of `sessionTotals`, they run per turn over the bodies, and at
+ *  this altitude the pair `cache_hit_rate` + prefix breaks already says what
+ *  there is to say about the cache. Memoized on the session object, which
+ *  `ingest` rebuilds from scratch on every refresh — so the memo expires with
+ *  the data it was taken from. */
+function resumoSessao(s) {
+  if (s._resumo) return s._resumo;
+  const b = buckets(s.turns, () => '_')?._
+    ?? { turns: s.turns.length, input: 0, cache_read: 0, cache_write: 0, output: 0,
+         reasoning: 0, total: 0, cost: null, cache_hit_rate: null, sem_preco: 0, sem_contagem: 0 };
+  // Where the work was done. The harness records it on every turn and nothing in
+  // the viewer read it until now; here it is the best name a session has — an id
+  // says nothing, and "llm-audit / main" says which afternoon this was.
+  const cc = s.turns.find(t => t.claude_code?.cwd)?.claude_code ?? null;
+  const comReuso = s.turns.filter(t => t.reuse);
+  const quando = diaDe(s);
+  const out = {
+    id: s.id, quando,
+    // A session that opened at 23:50 and ran past midnight still files under the
+    // day it began, which is the day the person remembers it as.
+    dia: chaveDia(quando),
+    cwd: cc?.cwd ?? null,
+    projeto: cc?.cwd ? cc.cwd.split('/').filter(Boolean).pop() : null,
+    branch: cc?.git_branch ?? null,
+    models: [...new Set(s.turns.map(t => t.model).filter(Boolean))],
+    errors: s.turns.filter(falhou).length,
+    // The unit a person recognizes: one thing asked for, however many trips to
+    // the model it took. Already memoized on the session.
+    pedidos: pedidos(s).list.filter(p => p.kind !== 'compaction').length,
+    sub_turns: s.turns.filter(isSub).length,
+    retries: s.turns.filter(t => t.retry_of != null).length,
+    compactacoes: s.turns.filter(t => t.compaction).length,
+    // Read off `t.reuse`, which `repairReuse` already filled in for every session
+    // in the folder at ingest: no second pass over the bodies happens here.
+    prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
+    elapsed: s.turns.some(t => t.elapsed_seconds != null)
+      ? s.turns.reduce((a, t) => a + (t.elapsed_seconds ?? 0), 0)
+      : (s.summary?.elapsed_seconds ?? null),
+    ...b,
+  };
+  Object.defineProperty(s, '_resumo', { value: out, enumerable: false });
+  return out;
+}
+
+/** The folder's sessions grouped into the days they ran on, newest day first and
+ *  newest session first inside each — the order `ingest` already put them in. */
+function porDia(sessions) {
+  const map = new Map();
+  for (const s of sessions) {
+    const r = resumoSessao(s);
+    const g = map.get(r.dia) ?? { dia: r.dia, quando: r.quando, sessoes: [] };
+    // The day's label comes from its earliest session, not from the first one
+    // read: the list arrives newest first.
+    if (r.quando && (!g.quando || r.quando < g.quando)) g.quando = r.quando;
+    g.sessoes.push({ s, r });
+    map.set(r.dia, g);
+  }
+  const dias = [...map.values()].sort((a, b) => b.dia.localeCompare(a.dia));
+  const soma = (xs, f) => xs.reduce((a, x) => a + (x.r[f] ?? 0), 0);
+  for (const g of dias) {
+    g.sessoes.sort((a, b) => (b.r.quando ?? 0) - (a.r.quando ?? 0));
+    for (const f of ['turns', 'pedidos', 'input', 'cache_read', 'cache_write', 'output', 'total', 'errors'])
+      g[f] = soma(g.sessoes, f);
+    g.elapsed = soma(g.sessoes, 'elapsed') || null;
+    // Zero and "nothing here is priced" are not the same thing, and the day line
+    // must not answer the second with the first.
+    g.cost = g.sessoes.some(x => x.r.cost != null) ? soma(g.sessoes, 'cost') : null;
+    const prompt = g.input + g.cache_read + g.cache_write;
+    g.cache_hit_rate = prompt ? g.cache_read / prompt : null;
+  }
+  return dias;
+}
+
+/** The altitude picker: the folder, or the conversation open inside it. */
+function renderViewTabs() {
+  const bar = el('div', 'tabs top');
+  for (const [id, label, cnt, tip] of [
+    ['folder', 'Folder', S.sessions.length, 'every conversation in the open folder, by day'],
+    ['session', 'Session', turns().length, `the open conversation: ${S.sid ?? '—'}`],
+  ]) {
+    const b = el('button', 'tab' + (S.view === id ? ' active' : ''),
+      esc(label) + `<span class="cnt">${nf(cnt)}</span>`);
+    b.title = `${tip} (f)`;
+    b.onclick = () => { S.view = id; render(); };
+    bar.append(b);
+  }
+  return bar;
+}
+
+function renderFolderOverview() {
+  const wrap = el('div');
+  const q = S.q.toLowerCase();
+  const casa = r => !q || [r.id, r.cwd, r.branch, ...r.models]
+    .some(v => String(v ?? '').toLowerCase().includes(q));
+  const sessoes = S.sessions.filter(s => casa(resumoSessao(s)));
+  const dias = porDia(sessoes);
+  const rs = sessoes.map(resumoSessao);
+  // The same condition the session overview puts on its own Cost column: with no
+  // rate anywhere in the folder the screen shows no money at all, rather than a
+  // column of dashes pretending to be a bill.
+  const comCusto = sessoes.some(s => s.turns.some(t => custo(t) != null));
+  const soma = f => rs.reduce((a, r) => a + (r[f] ?? 0), 0);
+  const tot = {
+    turns: soma('turns'), pedidos: soma('pedidos'), total: soma('total'),
+    input: soma('input'), cache_read: soma('cache_read'), cache_write: soma('cache_write'),
+    output: soma('output'), errors: soma('errors'),
+    sub_turns: soma('sub_turns'), retries: soma('retries'),
+    cost: comCusto ? soma('cost') : null,
+    elapsed: soma('elapsed') || null,
+  };
+  const prompt = tot.input + tot.cache_read + tot.cache_write;
+  tot.cache_hit_rate = prompt ? tot.cache_read / prompt : null;
+  const comQuebras = rs.filter(r => r.prefix_breaks != null);
+  tot.prefix_breaks = comQuebras.length ? comQuebras.reduce((a, r) => a + r.prefix_breaks, 0) : null;
+
+  const todos = sessoes.flatMap(s => s.turns);
+  const semPrecoModelos = [...new Set(todos.filter(semPreco).map(t => t.model))];
+  const semPrecoTurnos = todos.filter(semPreco).length;
+  const furos = [...new Set(todos.flatMap(furosDe))];
+  const furosTurnos = todos.filter(t => furosDe(t).length).length;
+  const maisCara = comCusto
+    ? rs.reduce((a, r) => (r.cost ?? 0) > (a?.cost ?? -1) ? r : a, null) : null;
+
+  const datas = rs.map(r => r.quando).filter(Boolean).sort((a, b) => a - b);
+  const models = [...new Set(rs.flatMap(r => r.models))];
+  const cwds = [...new Set(rs.map(r => r.cwd).filter(Boolean))];
+  wrap.append(el('div', 'thead', `<h1>Folder</h1>
+    <div class="metarow">
+      <span class="chip accent solid">${nf(sessoes.length)} session(s)</span>${
+        q ? ` <span class="chip yellow">filtered from ${nf(S.sessions.length)}</span>` : ''}
+      <span class="chip cyan">${nf(dias.length)} day(s)</span>
+      ${datas.length ? `<span class="chip">${esc(rotuloDia(datas[0]))}${
+        chaveDia(datas[0]) !== chaveDia(datas[datas.length - 1])
+          ? ' → ' + esc(rotuloDia(datas[datas.length - 1])) : ''}</span>` : ''}
+      ${cwds.length ? `<span class="chip green" title="${esc(cwds.join('\n'))}">${
+        nf(cwds.length)} project(s)</span>` : ''}
+      ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
+      ${fonteCusto(todos) ? `<span class="chip orange">${esc(fonteCusto(todos))}</span>` : ''}
+    </div>`));
+
+  const K = (v, l, col) => `<div class="kpi"><b${col ? ` style="color:${col}"` : ''}>${v}</b><span>${l}</span></div>`;
+  wrap.append(el('div', 'grid2',
+    // The money first here, unlike the session screen: on the folder it is the
+    // reason the screen exists, not a detail beside the turn list.
+    (comCusto ? K(money(tot.cost, 2), 'Total cost', 'var(--green)') : '') +
+    K(nf(sessoes.length), 'Sessions') +
+    K(nf(tot.pedidos), 'User requests') +
+    K(nf(tot.turns), 'Turns') +
+    K(nf(tot.total), 'Total tokens') +
+    K(nf(tot.output), `Output tokens (${pctOf(tot.output, tot.total).toFixed(1)}% of total)`) +
+    (tot.cache_hit_rate != null
+      ? K((tot.cache_hit_rate * 100).toFixed(1) + '%', 'Cache hit rate', corCache(tot.cache_hit_rate)) : '') +
+    // The one prompt bucket billed above the input rate, and the one a session
+    // shrinks by not rewriting the history it already sent.
+    K(nf(tot.cache_write), 'Cache write', 'var(--yellow)') +
+    // Per request, because that is the unit a person spends in: whether a thing
+    // asked for costs a dollar or ten is the reading, not the folder's total.
+    (comCusto && tot.pedidos
+      ? K(money(tot.cost / tot.pedidos, 2),
+          'Cost per request',
+          tot.cost / tot.pedidos > REF_REQUEST_USD ? 'var(--yellow)' : 'var(--green)') : '') +
+    (comCusto && dias.length ? K(money(tot.cost / dias.length, 2), 'Cost per day') : '') +
+    K(dur(tot.elapsed), 'Summed call time') +
+    K(nf(tot.errors), 'Errors', tot.errors ? 'var(--red)' : 'var(--green)') +
+    // Every prefix break is a cache miss over the whole history behind it: on a
+    // week's worth of sessions it is the first place the cost goes to hide.
+    (tot.prefix_breaks != null
+      ? K(nf(tot.prefix_breaks), 'Prefix breaks', tot.prefix_breaks ? 'var(--red)' : 'var(--green)') : '') +
+    (tot.retries ? K(nf(tot.retries), 'Retried turns', 'var(--red)') : '') +
+    (tot.sub_turns ? K(nf(tot.sub_turns), 'Subagent turns', 'var(--purple)') : '') +
+    (maisCara?.cost
+      ? K(money(maisCara.cost, 2),
+          `Dearest session (${esc(maisCara.projeto ?? semData(maisCara.id))})`, 'var(--orange)') : '')
+  ));
+
+  // What the total does not cover, in the same two shapes the session overview
+  // reports them: a total presenting itself as the whole bill is worse than one
+  // that says where it stops.
+  if (semPrecoModelos.length)
+    wrap.append(el('div', 'foot', '* cost — out of the total: '
+      + semPrecoModelos.map(m => esc(m)).join(', ')
+      + ` — no rate recorded on the turn and none in the credit table (${semPrecoTurnos} turn(s)).`));
+  if (furos.length)
+    wrap.append(el('div', 'foot', '* cost — borrowed rate for '
+      + furos.map(f => esc(f)).join(', ')
+      + `: the catalog recorded zero while there were tokens of that kind to bill, on ${furosTurnos} turn(s).`));
+
+  // Cost by day. The figures alone say which day was dearest; the bars say by how
+  // much, which is what a person actually reads off a screen like this.
+  if (comCusto && dias.length > 1) {
+    const max = Math.max(...dias.map(d => d.cost ?? 0));
+    const box = el('div', 'card'); box.style.padding = '10px 14px';
+    for (const d of dias) {
+      const row = el('div', 'daybar');
+      row.innerHTML = `<span class="d">${esc(rotuloDia(d.quando))}</span>
+        <span class="mini"><i style="width:${max ? pctOf(d.cost ?? 0, max).toFixed(2) : 0}%"></i></span>
+        <span class="amt">${money(d.cost, 2)}</span>`;
+      row.title = `${d.sessoes.length} session(s) · ${d.pedidos} request(s) · ${
+        nf(d.turns)} turn(s) · ${nf(d.total)} tk`;
+      box.append(row);
+    }
+    wrap.append(el('h3', null, 'Cost by day'), box);
+  }
+
+  // The table. The token columns are exactly the ones the by-model table already
+  // has, in the same order, so a session line and a model line read as one thing.
+  // The model gets a column only when there is more than one to tell apart:
+  // otherwise every row would repeat the chip already in the header above, and
+  // it is exactly the width the Cost column needs to stay on screen.
+  const comModelo = models.length > 1;
+  const NCOL = 12 + (comCusto ? 1 : 0) + (comModelo ? 1 : 0);
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>Time</th><th>Session</th>${comModelo ? '<th>Model</th>' : ''}
+    <th class="num">Turns</th><th class="num">Asks</th>
+    <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th>
+    <th class="num">Output</th><th class="num">Total</th><th class="num">Cache</th>
+    <th class="num">Breaks</th><th class="num">Dur</th>${
+      comCusto ? '<th class="num">Cost</th>' : ''}</tr></thead>`;
+  const tb = el('tbody');
+  for (const g of dias) {
+    const band = el('tr', 'dia');
+    band.innerHTML = `<td colspan="${NCOL}"><b class="day">▤ ${esc(rotuloDia(g.quando))}</b> · <b>${
+      g.sessoes.length}</b> session(s) · ${g.pedidos} request(s) · ${g.turns} turn(s) · ${
+      nf(g.total)} tk${
+      g.cache_hit_rate != null ? ` · <span style="color:${corCache(g.cache_hit_rate)}">${
+        (g.cache_hit_rate * 100).toFixed(1)}% cache</span>` : ''}${
+      g.elapsed ? ` · ${dur(g.elapsed)}` : ''}${
+      g.errors ? ` · <span style="color:var(--red)">${g.errors} error(s)</span>` : ''}${
+      comCusto && g.cost != null ? ` · <b>${money(g.cost, 2)}</b>` : ''}</td>`;
+    tb.append(band);
+    for (const { s, r } of g.sessoes) {
+      const tr = el('tr', 'clickable');
+      tr.innerHTML = `<td class="k">${esc(hora(r.quando))}</td>
+        <td style="white-space:nowrap" title="${esc(r.id)}${r.cwd ? '\n' + esc(r.cwd) : ''}${
+          comModelo ? '' : '\n' + esc(r.models.join(', '))}">
+          <span style="font-family:var(--mono);color:var(--accent)">${esc(semData(r.id))}</span>
+          ${r.projeto ? `<span class="chip green trunc" title="${esc(r.cwd)}">${esc(r.projeto)}</span>` : ''}
+          ${r.branch ? `<span class="chip trunc" title="git branch: ${esc(r.branch)}">${esc(r.branch)}</span>` : ''}
+          ${r.errors ? `<span class="chip red solid">${r.errors} err</span>` : ''}
+          ${r.sub_turns ? `<span class="chip purple" title="turns run by subagents this conversation spawned">${
+            r.sub_turns} sub</span>` : ''}
+          ${r.retries ? `<span class="chip red" title="turns that repeated an already-refused prompt: paid for twice">${
+            r.retries} retry</span>` : ''}
+          ${r.compactacoes ? `<span class="chip yellow" title="times the history was rewritten">${
+            r.compactacoes}× compact</span>` : ''}</td>
+        ${comModelo ? `<td style="white-space:nowrap">${r.models.map(m => esc(m)).join(', ') || '—'}</td>` : ''}
+        <td class="num"${r.sem_contagem
+          ? ` title="${r.sem_contagem} turn(s) with no usage: they count here, but have no tokens"` : ''}>${
+          nf(r.turns)}${r.sem_contagem ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>
+        <td class="num">${nf(r.pedidos)}</td>
+        <td class="num">${nf(r.input)}</td>
+        <td class="num" style="color:var(--cyan)">${nf(r.cache_read)}</td>
+        <td class="num" style="color:var(--yellow)">${nf(r.cache_write)}</td>
+        <td class="num" style="color:var(--purple)">${nf(r.output)}</td>
+        <td class="num"><b>${nf(r.total)}</b></td>
+        <td class="num" style="color:${corCache(r.cache_hit_rate) ?? 'var(--faint)'}">${
+          r.cache_hit_rate != null ? (r.cache_hit_rate * 100).toFixed(1) + '%' : '—'}</td>
+        <td class="num" style="color:${r.prefix_breaks ? 'var(--red)' : 'var(--faint)'}"${
+          r.prefix_breaks != null
+            ? ` title="${r.prefix_breaks} of ${r.turns} turn(s) re-sent a prefix the previous turn had changed"` : ''}>${
+          r.prefix_breaks != null ? nf(r.prefix_breaks) : '—'}</td>
+        <td class="num">${dur(r.elapsed)}</td>
+        ${comCusto ? `<td class="num"${r.sem_preco
+          ? ` title="${r.sem_preco} turn(s) with no rate: they count in the tokens, not in the cost"` : ''}>${
+          r.cost != null ? money(r.cost, 2) : '—'
+        }${r.sem_preco ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}`;
+      // The table is the way into a session, which is the reason it is the screen
+      // the folder opens on.
+      tr.onclick = () => {
+        S.sid = s.id; S.view = 'session'; S.sel = 'overview';
+        S.scope = 'all'; S.collapsed = new Set();
+        renderSessionSelect(); render();
+      };
+      tb.append(tr);
+    }
+  }
+  tbl.append(tb);
+  const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
+  if (!sessoes.length) { tbl.remove(); card.append(el('div', 'empty', 'No session matches the search.')); }
+  wrap.append(el('h3', null, 'Sessions by day'), card);
+  wrap.append(el('div', 'foot', 'A row opens the session. <b>Asks</b> counts the things the person '
+    + 'asked for, not the trips to the model one of them took; <b>Breaks</b> counts the turns that '
+    + 're-sent a prefix the turn before had changed — each of those is a cache miss over the whole '
+    + 'history behind it.'));
+  return wrap;
+}
+
 function renderOverview() {
   const s = session(); const wrap = el('div');
   const tot2 = sessionTotals(s);
@@ -3765,12 +4137,16 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
+  if (e.key === 'f') { S.view = S.view === 'folder' ? 'session' : 'folder'; render(); return; }
+  if (e.key === 'r') { e.preventDefault(); refresh(); return; }
+  if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
+  // Everything below moves inside one conversation — down its turn list, across
+  // one turn's tabs — and in the folder view there is no such thing to move in.
+  if (S.view === 'folder') return;
   const list = turns().map(t => t.turn);
   const at = list.indexOf(S.sel);
   if (e.key === 'j' || e.key === 'ArrowDown') { S.sel = list[Math.min(at + 1, list.length - 1)] ?? list[0]; render(); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { if (at > 0) { S.sel = list[at - 1]; render(); } else { S.sel = 'overview'; render(); } }
-  else if (e.key === 'r') { e.preventDefault(); refresh(); }
-  else if (e.key === '/') { e.preventDefault(); $('#search').focus(); }
   else if (['1','2','3','4','5','6'].includes(e.key)) { S.tab = ['conv','comp','req','sys','stream','json'][+e.key - 1]; render(); }
 });
 </script>
