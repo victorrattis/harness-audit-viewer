@@ -440,22 +440,31 @@ const isCopilot = t => String(t.provider ?? '').toLowerCase().includes('copilot'
  *  harnesses paste in front, and lowercased. */
 const copilotModel = m => String(m ?? '').toLowerCase().split('/').pop();
 
-/** The model's rate, context tier already picked. `null` when the model is not
- *  in the table — and then the turn stays out of the total. */
+/** The model's rate with the context band already picked, and the cut-off it
+ *  passed to get there — `over` is null on the cheap side of the table, and on a
+ *  model that has no cut-off at all. Which side was taken used to be thrown away
+ *  here: the turn was billed at the dearer rate and nothing on the screen said
+ *  so. `null` when the model is not in the table — and then the turn stays out
+ *  of the total. */
 function copilotPrice(model, promptTokens) {
   const row = COPILOT_PRICES[copilotModel(model)];
   if (!row) return null;
-  return row.limit ? (promptTokens > row.limit ? row.high : row.low) : row;
+  if (!row.limit) return { p: row, over: null };
+  return promptTokens > row.limit ? { p: row.high, over: row.limit } : { p: row.low, over: null };
 }
 
 /** The Copilot credit table read as the turn's rates: in dollars per 1M tokens,
  *  under the same four names the plugin records. `null` when the turn is not
- *  Copilot's or the model is not in the table. */
+ *  Copilot's or the model is not in the table.
+ *
+ *  `over` rides along beside the four: `calcTarifas` reads the rates by name out
+ *  of RATE_FIELDS, so it passes through untouched. */
 function copilotRates(t) {
   if (!isCopilot(t)) return null;
   const u = t.usage ?? {};
   const prompt = (u.input ?? 0) + (u.cache_read ?? 0) + (u.cache_write ?? 0);
-  const p = copilotPrice(t.model, prompt); if (!p) return null;
+  const hit = copilotPrice(t.model, prompt); if (!hit) return null;
+  const p = hit.p;
   return {
     input: p.in * CREDIT_USD,
     cache_read: p.cached * CREDIT_USD,
@@ -463,6 +472,7 @@ function copilotRates(t) {
     // of its own: the written tokens are billed as input.
     cache_write: (p.write ?? p.in) * CREDIT_USD,
     output: p.out * CREDIT_USD,
+    over: hit.over,
   };
 }
 
@@ -527,11 +537,40 @@ function calcTarifas(t) {
   }
   return {
     rates, furos,
+    tier: faixaTarifa(t, cred),
     base: t.rates_per_million ? 'opencode catalog'
         : t.cost?.per_million ? 'llm-audit prices.json'
         : 'Copilot credits',
   };
 }
+
+/** The context band this turn was billed in, or `null` for the base one — which
+ *  is also what a model with no band at all gets, and what the whole Claude Code
+ *  side gets, since its catalog has no bands to be in.
+ *
+ *  Never inferred from the size of the prompt. A big prompt is not a dearer rate:
+ *  it is one only where the log says so, or where a table declares a cut-off for
+ *  that model. Claude Code logs here run past 200k tokens by the hundreds and
+ *  none of them was billed a cent differently — marking those would be inventing
+ *  a price nobody charged.
+ *
+ *  `fonte` keeps the two apart, the way `base` does for the rate itself: `log` is
+ *  a fact of the moment the request went out, recorded by the plugin that watched
+ *  it; `derived` is this viewer reading a resale table that may have moved since.
+ */
+function faixaTarifa(t, cred) {
+  const gravado = String(t.rates_tier ?? '');
+  if (gravado === 'over_200k') return { over: 200_000, fonte: 'log' };
+  const m = /^context>(\d+)$/.exec(gravado);
+  if (m) return { over: +m[1], fonte: 'log' };
+  // 'base', empty, or a name written after this was released: say nothing rather
+  // than guess at what it meant.
+  if (gravado) return null;
+  return cred?.over ? { over: cred.over, fonte: 'derived' } : null;
+}
+
+/** `long context > 272k` — the cut-off the turn passed, not the prompt it had. */
+const faixaLabel = f => `long context > ${Math.round(f.over / 1000)}k`;
 
 /** What each part of the turn cost, in dollars. `reasoning` is not a part of its
  *  own: it is already inside `output`.
@@ -578,6 +617,9 @@ const semPreco = t => !!t.usage?.total && tarifas(t) == null;
 
 /** Components this turn paid for with a borrowed rate. */
 const furosDe = t => tarifas(t)?.furos ?? [];
+
+/** The context band this turn was billed in, `null` when it was the base one. */
+const faixaDe = t => tarifas(t)?.tier ?? null;
 
 /* =========================================================================
    How much is much
@@ -710,6 +752,12 @@ function celulaFaixa(t, refs) {
   if (local) diz.push(`${vezes(f.cost / local)} the median turn for ${t.model ?? '?'} in this session (${money(local, 4)})`);
   diz.push(`${vezes(f.cost / REF_STEP_USD)} the ${money(REF_STEP_USD, 2)} an average call costs across ~350k real coding-agent steps (TraceLab)`);
   if (drv) diz.push(`${drv} is what paid for it`);
+  // The band, when it is not the base one. It belongs in this tooltip more than
+  // the lines above it do: they say the turn was dear, this one says the unit
+  // price itself changed — which is the reading that sends you to shorten the
+  // conversation rather than to trim the prompt.
+  const fx = faixaDe(t);
+  if (fx) diz.push(`billed at the ${faixaLabel(fx)} rate`);
   return `<span class="${f.band.chip}" title="${esc(diz.join(' · '))}">${f.band.label}</span>`;
 }
 
@@ -2400,6 +2448,11 @@ function sessionTotals(s) {
     // still the best number available, but it stops presenting itself as exact.
     custo_furos: [...new Set(s.turns.flatMap(furosDe))],
     custo_furos_turnos: s.turns.filter(t => furosDe(t).length).length,
+    // Turns billed above a context cut-off, and which cut-offs those were. The
+    // total is right either way; this is what says a slice of it was bought at
+    // another unit price.
+    custo_faixas: [...new Set(s.turns.map(faixaDe).filter(Boolean).map(faixaLabel))],
+    custo_faixa_turnos: s.turns.filter(t => faixaDe(t)).length,
     // Turns that repeated an already-refused prompt: tokens paid for twice.
     retries: s.turns.filter(t => t.retry_of != null).length || null,
     retry_tokens: s.turns.filter(t => t.retry_of != null).reduce((a, t) => a + (t.usage?.total ?? 0), 0) || null,
@@ -2900,6 +2953,8 @@ function renderFolderOverview() {
   const semPrecoTurnos = todos.filter(semPreco).length;
   const furos = [...new Set(todos.flatMap(furosDe))];
   const furosTurnos = todos.filter(t => furosDe(t).length).length;
+  const faixas = [...new Set(todos.map(faixaDe).filter(Boolean).map(faixaLabel))];
+  const faixaTurnos = todos.filter(t => faixaDe(t)).length;
   const maisCara = comCusto
     ? rs.reduce((a, r) => (r.cost ?? 0) > (a?.cost ?? -1) ? r : a, null) : null;
 
@@ -2966,6 +3021,12 @@ function renderFolderOverview() {
     wrap.append(el('div', 'foot', '* cost — borrowed rate for '
       + furos.map(f => esc(f)).join(', ')
       + `: the catalog recorded zero while there were tokens of that kind to bill, on ${furosTurnos} turn(s).`));
+  // The part of the week's bill bought at a dearer unit price. Not a hole in the
+  // total: a reading of it.
+  if (faixaTurnos)
+    wrap.append(el('div', 'foot', 'cost — '
+      + `${faixaTurnos} of ${todos.length} turn(s) crossed a context cut-off and were billed at `
+      + faixas.map(f => esc(f)).join(' / ') + ' rates.'));
 
   // Cost by day. The figures alone say which day was dearest; the bars say by how
   // much, which is what a person actually reads off a screen like this.
@@ -3182,6 +3243,13 @@ function renderOverview() {
       + tot2.custo_furos.map(f => esc(f)).join(', ')
       + `: the catalog recorded zero on the turn while there were tokens of that kind to bill, so the total used the Copilot credit table`
       + ` (or, failing that, the input rate) on ${tot2.custo_furos_turnos} turn(s).`));
+  // Not a caveat on the total — the total already has it right. It is the reading
+  // that says part of this bill was bought at a dearer unit price, which is
+  // answered by ending the conversation sooner, not by sending less.
+  if (tot2.custo_faixa_turnos)
+    wrap.append(el('div', 'foot', 'cost — '
+      + `${tot2.custo_faixa_turnos} of ${s.turns.length} turn(s) crossed a context cut-off and were billed at `
+      + tot2.custo_faixas.map(f => esc(f)).join(' / ') + ' rates.'));
 
   // Distribution of the verdicts: where the caching gets it right and where it slips.
   const vs = Object.entries(tot2.cache_verdicts).sort((a, b) => b[1] - a[1]);
@@ -3405,6 +3473,13 @@ function renderTurnHead(t) {
         return `<span class="chip ${V.chip} solid" title="${esc(A.reason)}">${V.glyph} ${esc(V.label)}</span>`; })()}
       ${chip('cyan', t.cache_hit_rate != null ? 'cache ' + (t.cache_hit_rate * 100).toFixed(1) + '%' : null)}
       ${t.context_limit && u.prompt ? `<span class="chip ${u.prompt / t.context_limit > 0.8 ? 'red solid' : ''}" title="the prompt against this model's context window. Past ~80% the harness starts compacting, and a compaction rewrites the history — which throws the whole cached prefix away">context ${(u.prompt / t.context_limit * 100).toFixed(0)}% of ${nf(t.context_limit)}</span>` : ''}
+      ${(() => { const fx = faixaDe(t); if (!fx) return '';
+        // Next to the window chip because both read the prompt — that one against
+        // the model's context limit, this one against the price cut-off. Absent
+        // on the base band, which is most turns and every Claude Code one.
+        return `<span class="chip orange solid" title="this turn's prompt passed ${nf(fx.over)} tokens, so it was billed at the model's long-context rate instead of the base one — ${
+          fx.fonte === 'log' ? 'the band the harness recorded on the turn' : 'the band read off the Copilot credit table here, not recorded in the log'
+        }">${esc(faixaLabel(fx))}</span>`; })()}
       <span class="chip">stop: ${esc(r.stop_reason ?? '—')}</span>
       ${chip('', res.bytes != null ? bytes(res.bytes) : null)}
       ${chip('', res.service_tier ? 'tier ' + esc(res.service_tier) : null)}
