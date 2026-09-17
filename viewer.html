@@ -1000,6 +1000,10 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
     let data; try { data = JSON.parse(f.text); } catch { continue; }
     if (!map.has(sid)) map.set(sid, { id: sid, summary: null, turns: [] });
     if (name === 'summary.json') map.get(sid).summary = data;
+    // The plugin's own index of the folder. Everything in it is already in the
+    // turns, except the one thing the turns cannot carry: when the folder was
+    // last written. Kept only for that, and only as a fallback.
+    else if (name === 'turns.json') map.get(sid).index = data;
     else if (data && (data.turn != null || data.request)) crus.push({ sid, name, data, mtime: f.mtime, path: f.path });
   }
   // Only now: the store may have arrived after the turn that points into it.
@@ -1050,7 +1054,8 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
 
 /** What is worth reading from a log folder: the turns, their piece store, and
  *  the two journals the plugin keeps alongside — tool runs and session events.
- *  `turns.jsonl` is an index, the same thing already in the turns. */
+ *  `turns.json` is an index of things already in the turns, and is read for the
+ *  one field that is not: when the folder was last written. */
 const queremos = name =>
   name.endsWith('.json') || name === 'pieces.jsonl' || name === TOOL_FILE || name === EVENT_FILE;
 
@@ -2418,6 +2423,9 @@ function renderSide() {
   // A subagent only shows up grouped in the full view; once picked in the scope,
   // the list is already its own and the header would have nothing to separate.
   const peds = pedidos(s);
+  // The day the session opened: every line prints a date only if it fell on
+  // another one.
+  const diaLista = diaDe(s);
   for (const block of blocks) {
     const agrupado = S.scope === 'all' && block.sub;
     if (agrupado) list.append(subHeader(g.subs.get(block.sub), block));
@@ -2450,6 +2458,8 @@ function renderSide() {
           <span class="ttl">${esc(turnLabel(t))}</span>
         </div>
         <div class="r2">
+          <span title="${t._approxTime ? 'approximate: the file’s mtime' : 'when this request went out'}">${
+            t._approxTime ? '~' : ''}${esc(horaTurno(t.started_at, diaLista))}</span>
           <span>${secs(t.elapsed_seconds)}</span>
           <span>${nf(t.usage?.total ?? 0)} tk</span>
           ${(() => { const A = cacheAudit(t), V = VERDICT[A.verdict];
@@ -2626,6 +2636,48 @@ const chaveDia = d => d ? d.toLocaleDateString('en-CA') : '—';
 const rotuloDia = d => d ? d.toLocaleDateString('en-US',
   { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : 'date not recorded';
 const hora = d => d ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—';
+
+/** When a turn finished: the instant it went out, plus how long it took.
+ *
+ *  Null when either half is missing. A format that records no duration cannot
+ *  say when anything ended, and an end guessed from the next turn's start would
+ *  read exactly like a measured one while counting the wait in between. */
+const fimDe = t => {
+  if (!t?.started_at || t.elapsed_seconds == null) return null;
+  const d = new Date(new Date(t.started_at).getTime() + t.elapsed_seconds * 1000);
+  return isNaN(d) ? null : d;
+};
+
+/** When the conversation last moved: the end of its most recent turn, or that
+ *  turn's start where no duration was recorded.
+ *
+ *  `turns.json` carries an `updated_at` of its own, but that is the instant the
+ *  index was *written* — one number for a whole burst of turns, and later than
+ *  the work it describes. So it is the fallback, for a folder whose turns say
+ *  nothing, rather than the first answer. */
+function ultimaDe(s) {
+  let last = null;
+  for (const t of s.turns ?? []) {
+    const d = fimDe(t) ?? (t.started_at ? new Date(t.started_at) : null);
+    if (d && !isNaN(d) && (!last || d > last)) last = d;
+  }
+  if (last) return last;
+  const d = s.index?.updated_at ? new Date(s.index.updated_at) : null;
+  return d && !isNaN(d) ? d : null;
+}
+
+/** A moment inside one conversation. The seconds are part of it — two turns
+ *  share a minute all the time — and the date shows up only when it is not the
+ *  day the session began, so an afternoon reads as a column of times and a
+ *  session that ran past midnight still says which day each turn is on. */
+const horaTurno = (value, base) => {
+  const d = value instanceof Date ? value : value ? new Date(value) : null;
+  if (!d || isNaN(d)) return '—';
+  const hm = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return base && chaveDia(d) !== chaveDia(base)
+    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + hm : hm;
+};
+
 /** Colour for a cache hit rate, on the same cuts the session overview uses. */
 const corCache = r => r == null ? null
   : r > 0.9 ? 'var(--green)' : r > 0.5 ? 'var(--yellow)' : 'var(--red)';
@@ -2658,6 +2710,10 @@ function resumoSessao(s) {
   const quando = diaDe(s);
   const out = {
     id: s.id, quando,
+    // The other end of the session: `quando` says when it opened, this when it
+    // last moved. A folder is appended to when a conversation is resumed, so
+    // the two can be days apart.
+    ultima: ultimaDe(s),
     // A session that opened at 23:50 and ran past midnight still files under the
     // day it began, which is the day the person remembers it as.
     dia: chaveDia(quando),
@@ -2850,9 +2906,9 @@ function renderFolderOverview() {
   // otherwise every row would repeat the chip already in the header above, and
   // it is exactly the width the Cost column needs to stay on screen.
   const comModelo = models.length > 1;
-  const NCOL = 12 + (comCusto ? 1 : 0) + (comModelo ? 1 : 0);
+  const NCOL = 13 + (comCusto ? 1 : 0) + (comModelo ? 1 : 0);
   const tbl = el('table');
-  tbl.innerHTML = `<thead><tr><th>Time</th><th>Session</th>${comModelo ? '<th>Model</th>' : ''}
+  tbl.innerHTML = `<thead><tr><th>Time</th><th>Last</th><th>Session</th>${comModelo ? '<th>Model</th>' : ''}
     <th class="num">Turns</th><th class="num">Asks</th>
     <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th>
     <th class="num">Output</th><th class="num">Total</th><th class="num">Cache</th>
@@ -2873,6 +2929,9 @@ function renderFolderOverview() {
     for (const { s, r } of g.sessoes) {
       const tr = el('tr', 'clickable');
       tr.innerHTML = `<td class="k">${esc(hora(r.quando))}</td>
+        <td class="k" style="color:var(--faint)" title="${
+          r.ultima ? 'last turn ended ' + esc(fmtTime(r.ultima)) : 'no turn in this folder recorded when it ran'}">${
+          esc(hora(r.ultima))}</td>
         <td style="white-space:nowrap" title="${esc(r.id)}${r.cwd ? '\n' + esc(r.cwd) : ''}${
           comModelo ? '' : '\n' + esc(r.models.join(', '))}">
           <span style="font-family:var(--mono);color:var(--accent)">${esc(semData(r.id))}</span>
@@ -2948,6 +3007,11 @@ function renderOverview() {
       <span class="chip">${esc(s.turns[0]?.provider ?? '—')}</span>
       ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
       <span class="chip">${s.turns[0]?._approxTime ? '~' : ''}started ${esc(fmtTime(s.turns[0]?.started_at))}</span>
+      ${(() => { const u = ultimaDe(s);
+        // When the folder last moved. A conversation resumed days later appends
+        // to the same folder, so this is not "started plus the duration".
+        return u ? `<span class="chip" title="the end of the most recent turn in this folder">updated ${
+          esc(fmtTime(u))}</span>` : ''; })()}
       <span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log with SSE stream' : 'final-response log'}</span>
       ${[...new Set(s.turns.map(t => t._api))].map(a => `<span class="chip orange">${esc(apiLabel(a))}</span>`).join('')}
     </div>`));
@@ -3073,8 +3137,11 @@ function renderOverview() {
   // by-model tables further down use, so the two never disagree.
   const comCusto = !!tot2.copilot_turns;
   const tbl = el('table');
-  const NCOL = comCusto ? 13 : 11;
-  tbl.innerHTML = `<thead><tr><th>#</th><th>Model</th><th>Action</th>
+  const NCOL = comCusto ? 14 : 12;
+  // Every row's time is read against the day the session opened, so only a turn
+  // that fell on another day spends the width on a date.
+  const diaSessao = diaDe(s);
+  tbl.innerHTML = `<thead><tr><th>#</th><th>At</th><th>Model</th><th>Action</th>
       <th class="v">Input</th><th class="v">C.read</th><th class="v">C.write</th><th class="v">Output</th>
       <th class="v">Total</th>${comCusto ? '<th class="v">Cost</th><th class="v">Band</th>' : ''
       }<th class="v">Prefix</th><th class="v">Time</th><th class="v">End</th></tr></thead>`;
@@ -3136,6 +3203,11 @@ function renderOverview() {
               t.compaction.overflow ? ' — forced by context overflow' : ''}: ${
               compactDropped(t.compaction) != null ? nf(compactDropped(t.compaction)) + ' tk dropped'
                                                    : 'how much it dropped was not measured'}">compacted</span>` : ''}</td>
+      <td class="k" style="white-space:nowrap"${(() => { const f = fimDe(t);
+          return t.started_at
+            ? ` title="${t._approxTime ? 'the file’s mtime, not a recorded time — ' : ''}sent ${
+                esc(fmtTime(t.started_at))}${f ? `\nanswered ${esc(fmtTime(f))}` : ''}"` : '';
+        })()}>${t._approxTime ? '~' : ''}${esc(horaTurno(t.started_at, diaSessao))}</td>
       <td style="white-space:nowrap">${esc(t.model)}${variantOf(t)
         ? ` <span style="color:var(--faint)">· ${esc(variantOf(t))}</span>` : ''}${
         t.agent ? ` <span style="color:var(--faint)">· ${esc(t.agent)}</span>` : ''}</td>
@@ -3236,7 +3308,12 @@ function renderTurnHead(t) {
       ${variantOf(t) ? `<span class="chip" title="reasoning variant asked for on this turn">variant: ${esc(variantOf(t))}</span>` : ''}
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
       ${isSub(t) ? `<span class="chip purple solid" title="a session of its own on the wire (${esc(t.session ?? '?')}), filed in the folder of whoever spawned it">subagent of ${esc(shortId(parentOf(t)))}</span>` : ''}
-      ${t.started_at ? `<span class="chip">${t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}</span>` : ''}
+      ${t.started_at ? `<span class="chip" title="${
+        t._approxTime ? 'the file’s mtime, not a recorded time' : 'when the request went out'}">${
+        t._approxTime ? '~' : ''}${esc(fmtTime(t.started_at))}${(() => { const f = fimDe(t);
+          // The end, where the log recorded how long the call took: a turn is an
+          // interval, and the pair says which minutes of the afternoon it held.
+          return f ? ' → ' + esc(horaTurno(f, new Date(t.started_at))) : ''; })()}</span>` : ''}
       ${chip('yellow', t.elapsed_seconds != null ? secs(t.elapsed_seconds) : null)}
       ${u.source === 'estimated' ? '<span class="chip yellow solid">estimated tokens</span>'
         : u.source === 'provider' ? '<span class="chip green">provider count</span>' : ''}
