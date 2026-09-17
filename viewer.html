@@ -2831,10 +2831,17 @@ const semData = id => String(id ?? '').replace(/^\d{8}[_-]\d{6}-/, '') || String
  *  title and never the first. `first-prompt` says the name was cut from what was
  *  asked rather than given by the harness, and the screens mark it as such. */
 function tituloSessao(s) {
+  // The folder's own file first, which is the current name on either side:
+  // `summary.json` is the Claude Code reader's, `turns.json` the opencode
+  // plugin's index, rewritten with every turn.
   if (s.summary?.title) return { titulo: s.summary.title, fonte: s.summary.title_source ?? null };
+  if (s.index?.title) return { titulo: s.index.title, fonte: s.index.title_source ?? 'session' };
+  // Then the turns, newest first: opencode names a session only after the first
+  // reply, so the turn that carries a name is never the first one.
   for (let at = s.turns.length - 1; at >= 0; at--) {
-    const cc = s.turns[at]?.claude_code;
-    if (cc?.title) return { titulo: cc.title, fonte: cc.title_source ?? null };
+    const t = s.turns[at] ?? {};
+    const cc = t.claude_code ?? t;
+    if (cc.title) return { titulo: cc.title, fonte: cc.title_source ?? null };
   }
   return { titulo: null, fonte: null };
 }
@@ -3108,7 +3115,7 @@ function renderFolderOverview() {
           ${r.titulo ? `<div class="stitle${r.titulo_fonte === 'first-prompt' ? ' derivado' : ''}">${
             esc(r.titulo)}</div>` : ''}
           <span style="white-space:nowrap">
-          <span style="font-family:var(--mono);color:var(--${r.titulo ? 'faint' : 'accent'})">${esc(semData(r.id))}</span>
+          <span style="font-family:var(--mono);color:var(--accent)">${esc(semData(r.id))}</span>
           ${r.projeto ? `<span class="chip green trunc" title="${esc(r.cwd)}">${esc(r.projeto)}</span>` : ''}
           ${r.branch ? `<span class="chip trunc" title="git branch: ${esc(r.branch)}">${esc(r.branch)}</span>` : ''}
           ${r.errors ? `<span class="chip red solid">${r.errors} err</span>` : ''}
