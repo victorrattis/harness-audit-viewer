@@ -102,6 +102,9 @@ header .grow{flex:1}
 /* A chip carrying a name someone else chose — a project directory, a worktree
    branch — cannot be allowed to set the width of the column it sits in. The
    whole value stays in the title. */
+.stitle{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
+  margin-bottom:2px}
+.stitle.derivado{font-weight:500;font-style:italic;color:var(--muted)}
 .chip.trunc{display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;vertical-align:middle}
 
@@ -2822,6 +2825,23 @@ const corCache = r => r == null ? null
  *  the date is already the row's group and the time is already its first cell. */
 const semData = id => String(id ?? '').replace(/^\d{8}[_-]\d{6}-/, '') || String(id ?? '');
 
+/** What the conversation is called. `summary.json` carries the current name —
+ *  the harness rewrites it as the work goes — and each turn carries the one in
+ *  force when it ran, which is why the fallback reads the last turn that has a
+ *  title and never the first. `first-prompt` says the name was cut from what was
+ *  asked rather than given by the harness, and the screens mark it as such. */
+function tituloSessao(s) {
+  if (s.summary?.title) return { titulo: s.summary.title, fonte: s.summary.title_source ?? null };
+  for (let at = s.turns.length - 1; at >= 0; at--) {
+    const cc = s.turns[at]?.claude_code;
+    if (cc?.title) return { titulo: cc.title, fonte: cc.title_source ?? null };
+  }
+  return { titulo: null, fonte: null };
+}
+
+/** The line a derived name carries in its tooltip, in both screens that show one. */
+const DERIVADO = 'name cut from the first prompt, not one the harness gave';
+
 /** One session as a line of the folder table.
  *
  *  Every figure here is either a field the log already carries or a sum
@@ -2843,6 +2863,7 @@ function resumoSessao(s) {
   // the viewer read it until now; here it is the best name a session has — an id
   // says nothing, and "llm-audit / main" says which afternoon this was.
   const cc = s.turns.find(t => t.claude_code?.cwd)?.claude_code ?? null;
+  const tit = tituloSessao(s);
   const comReuso = s.turns.filter(t => t.reuse);
   const quando = diaDe(s);
   const out = {
@@ -2855,6 +2876,10 @@ function resumoSessao(s) {
     // day it began, which is the day the person remembers it as.
     dia: chaveDia(quando),
     cwd: cc?.cwd ?? null,
+    // The name the person gave the conversation, which is what they look for:
+    // the id is what the folder is found by, not what it is remembered as.
+    titulo: tit.titulo,
+    titulo_fonte: tit.fonte,
     projeto: cc?.cwd ? cc.cwd.split('/').filter(Boolean).pop() : null,
     branch: cc?.git_branch ?? null,
     models: [...new Set(s.turns.map(t => t.model).filter(Boolean))],
@@ -3077,9 +3102,13 @@ function renderFolderOverview() {
         <td class="k" style="color:var(--faint)" title="${
           r.ultima ? 'last turn ended ' + esc(fmtTime(r.ultima)) : 'no turn in this folder recorded when it ran'}">${
           esc(hora(r.ultima))}</td>
-        <td style="white-space:nowrap" title="${esc(r.id)}${r.cwd ? '\n' + esc(r.cwd) : ''}${
+        <td title="${esc(r.id)}${r.titulo ? '\n' + esc(r.titulo) : ''}${
+          r.titulo_fonte === 'first-prompt' ? '\n' + DERIVADO : ''}${r.cwd ? '\n' + esc(r.cwd) : ''}${
           comModelo ? '' : '\n' + esc(r.models.join(', '))}">
-          <span style="font-family:var(--mono);color:var(--accent)">${esc(semData(r.id))}</span>
+          ${r.titulo ? `<div class="stitle${r.titulo_fonte === 'first-prompt' ? ' derivado' : ''}">${
+            esc(r.titulo)}</div>` : ''}
+          <span style="white-space:nowrap">
+          <span style="font-family:var(--mono);color:var(--${r.titulo ? 'faint' : 'accent'})">${esc(semData(r.id))}</span>
           ${r.projeto ? `<span class="chip green trunc" title="${esc(r.cwd)}">${esc(r.projeto)}</span>` : ''}
           ${r.branch ? `<span class="chip trunc" title="git branch: ${esc(r.branch)}">${esc(r.branch)}</span>` : ''}
           ${r.errors ? `<span class="chip red solid">${r.errors} err</span>` : ''}
@@ -3088,7 +3117,7 @@ function renderFolderOverview() {
           ${r.retries ? `<span class="chip red" title="turns that repeated an already-refused prompt: paid for twice">${
             r.retries} retry</span>` : ''}
           ${r.compactacoes ? `<span class="chip yellow" title="times the history was rewritten">${
-            r.compactacoes}× compact</span>` : ''}</td>
+            r.compactacoes}× compact</span>` : ''}</span></td>
         ${comModelo ? `<td style="white-space:nowrap">${r.models.map(m => esc(m)).join(', ') || '—'}</td>` : ''}
         <td class="num"${r.sem_contagem
           ? ` title="${r.sem_contagem} turn(s) with no usage: they count here, but have no tokens"` : ''}>${
@@ -3143,7 +3172,14 @@ function renderOverview() {
   const subs = new Set(s.turns.filter(isSub).map(t => t.session));
   const raiz = ids.filter(x => !subs.has(x));
   const streamed = s.turns.some(t => t._format === 'stream' || t._format === 'audit2');
-  wrap.append(el('div', 'thead', `<h1>Overview</h1>
+  // The name over the screen, and the screen's own name demoted beside it: an id
+  // says nothing, and it is one chip below either way.
+  const tit = tituloSessao(s);
+  wrap.append(el('div', 'thead', `<h1${
+      tit.fonte === 'first-prompt'
+        ? ` title="${esc(DERIVADO)}" style="font-style:italic;font-weight:500;color:var(--muted)"` : ''}>${
+      esc(tit.titulo ?? 'Overview')}${
+      tit.titulo ? '<span style="font-weight:400;font-size:13px;color:var(--faint)">Overview</span>' : ''}</h1>
     <div class="metarow">
       <span class="chip accent solid">${esc(s.id)}</span>
       ${raiz.map(x => `<span class="chip cyan" title="session id">${esc(x)}</span>`).join('')}
