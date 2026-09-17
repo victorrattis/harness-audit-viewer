@@ -42,6 +42,7 @@ header input:focus,header select:focus,.scopebar select:focus{border-color:var(-
 header .grow{flex:1}
 .btn{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{border-color:var(--accent);color:var(--accent)}
 .btn[disabled]{opacity:.55}
 .btn.spin{animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -285,6 +286,9 @@ tr.pedido .act{color:var(--yellow)}
 #drop h2{margin:0 0 8px;font-size:22px}
 #drop p{color:var(--muted);margin:0 0 20px;font-size:13.5px}
 #drop code{font-family:var(--mono);background:var(--panel2);padding:2px 7px;border-radius:5px;font-size:12.5px}
+#drop .picks{display:flex;gap:10px;justify-content:center;align-items:center}
+#drop .picks .btn{padding:9px 18px}
+#reopenBtn{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hint{color:var(--faint);font-size:11.5px;margin-top:18px;line-height:1.8}
 kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px solid var(--border);
   border-radius:4px;padding:1px 5px}
@@ -314,11 +318,15 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
   <div class="box">
     <h2>Audit log viewer</h2>
     <p>Drop the folder with the logs here (the audit root, or a single session), or pick it below.</p>
-    <button class="btn" id="pickBtn" style="padding:9px 18px">Select folder…</button>
+    <div class="picks">
+      <button class="btn primary" id="reopenBtn" hidden></button>
+      <button class="btn" id="pickBtn">Select folder…</button>
+    </div>
     <input type="file" id="fileInput" webkitdirectory directory multiple hidden>
     <div class="hint">
       Everything runs locally in the browser — no data leaves the machine.
-      Once the folder is open, <b>⟳</b> re-reads it — new turns included — without asking again.<br>
+      Once the folder is open, <b>⟳</b> re-reads it — new turns included — without asking again,
+      and <b>↻</b> brings it back on the next visit.<br>
       Alternative: <code>python3 -m http.server 8000</code> in the folder, then open
       <code>localhost:8000/viewer.html</code> (it loads by itself).<br>Formats: OpenCode (SSE stream) and harness-audit (final response).
     </div>
@@ -1106,8 +1114,47 @@ dz.addEventListener('drop', async e => {
     ? async () => { const out = []; for (const h of handles) await walkHandle(h, h.name + '/', 1, out); return out; }
     : async () => { const out = []; for (const en of entries) await readEntry(en, out, ''); return out; };
   S.reload = read;
+  // Two folders at once cannot be reopened as one, and half the logs back is
+  // worse than none: only a lone folder is remembered.
+  if (handles.length === 1) remember(handles[0]);
   ingest(await read());
 });
+
+/** The folder read last, so the next visit is one click instead of the dialog
+ *  again. A directory handle is structured-cloneable but not JSON, so this has
+ *  to be IndexedDB: localStorage would only ever store "[object Object]".
+ *
+ *  Each helper opens, transacts and issues its request inside one promise
+ *  executor on purpose — a transaction goes inactive as soon as control returns
+ *  to the event loop, so an object store handed out of an await is already dead. */
+const idb = () => new Promise((ok, no) => {
+  const rq = indexedDB.open('audit-viewer', 1);
+  rq.onupgradeneeded = () => rq.result.createObjectStore('folders');
+  rq.onsuccess = () => ok(rq.result);
+  rq.onerror = () => no(rq.error);
+});
+async function folders(mode, run) {
+  const db = await idb();
+  try {
+    return await new Promise((ok, no) => {
+      const rq = run(db.transaction('folders', mode).objectStore('folders'));
+      rq.onsuccess = () => ok(rq.result);
+      rq.onerror = () => no(rq.error);
+    });
+  } finally { db.close(); }
+}
+const lastGet = ()  => folders('readonly',  st => st.get('last'));
+const lastPut = dir => folders('readwrite', st => st.put({ handle: dir, name: dir.name, at: Date.now() }, 'last'));
+const lastDel = ()  => folders('readwrite', st => st.delete('last'));
+const remember = dir => lastPut(dir).catch(e => console.warn('could not remember the folder:', e));
+
+/** Takes a picked folder as the source: remembers it for the next visit, and
+ *  points the refresh button at it. */
+async function useHandle(dir) {
+  remember(dir);
+  S.reload = () => walkHandle(dir, dir.name + '/');
+  ingest(await S.reload());
+}
 
 /** Opens a folder. The File System Access API hands back a handle rather than a
  *  copy of the files, so the folder is chosen and allowed once and every refresh
@@ -1123,8 +1170,7 @@ async function pick() {
     }
   }
   if (!dir) { $('#fileInput').click(); return; }
-  S.reload = () => walkHandle(dir, dir.name + '/');
-  ingest(await S.reload());
+  await useHandle(dir);
 }
 $('#pickBtn').onclick = $('#loadBtn').onclick = pick;
 $('#fileInput').onchange = async e => {
@@ -1158,6 +1204,41 @@ async function collectHttp() {
   await walk('', 1);
   return out;
 }
+
+/** Offers the folder read last. The permission a pick granted does not always
+ *  outlive the page, so the click may still raise a one-line confirmation —
+ *  which is the whole dialog saved either way.
+ *
+ *  Nothing here races the http auto-load below: the button is painted inside
+ *  #drop, which that load hides once it has turns of its own. */
+async function offerLast() {
+  if (!window.showDirectoryPicker || !window.indexedDB) return;   // no handles to store
+  let rec = null;
+  try { rec = await lastGet(); } catch (e) { return; }
+  if (!rec?.handle) return;
+  let state = 'prompt';
+  try { state = await rec.handle.queryPermission({ mode: 'read' }); } catch (e) { return; }
+  if (state === 'denied') { lastDel().catch(() => {}); return; }
+  const btn = $('#reopenBtn');
+  btn.textContent = '↻ ' + rec.name;
+  btn.title = 'Reopen the folder read last: ' + rec.name;   // the label may be cut short
+  btn.hidden = false;
+  btn.onclick = () => reopen(rec.handle);
+}
+
+async function reopen(dir) {
+  try {
+    // Already granted answers without a prompt, which is the whole point.
+    if (await dir.requestPermission({ mode: 'read' }) !== 'granted') return;
+    await useHandle(dir);
+  } catch (e) {                                // moved, renamed, gone
+    console.warn('could not reopen the folder:', e);
+    $('#reopenBtn').hidden = true;
+    lastDel().catch(() => {});
+    alert('That folder cannot be read any more. Pick it again.');
+  }
+}
+offerLast();
 
 // auto-load when served over http
 (async function auto() {
