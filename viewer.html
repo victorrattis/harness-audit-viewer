@@ -522,9 +522,18 @@ function tarifas(t) {
 
 function calcTarifas(t) {
   const u = t.usage; if (!u) return null;
-  const r = t.rates_per_million ?? t.cost?.per_million;
+  const gravado = t.rates_per_million ?? t.cost?.per_million;
   const cred = copilotRates(t);
-  if (!r && !cred) return null;
+  if (!gravado && !cred) return null;
+  // Past a Copilot cut-off the credit table is not filling a hole: it is naming
+  // a different rate for the same model, and it is the rate that billed. What
+  // the log recorded is the model's base band — the catalog that wrote it has
+  // no cut-off to read, so it says `base` whatever the prompt was, and letting
+  // it lead there bills long context at the cheap side of the table. Below the
+  // cut-off `over` is null, nothing rides over, and the recorded rate leads as
+  // before with its holes filled from the table.
+  const banda = cred?.over ? cred : null;
+  const r = banda ?? gravado;
   const rates = {}, furos = [];
   for (const f of RATE_FIELDS) {
     const v = r?.[f];
@@ -541,7 +550,8 @@ function calcTarifas(t) {
   return {
     rates, furos,
     tier: faixaTarifa(t, cred),
-    base: t.rates_per_million ? 'opencode catalog'
+    base: banda ? 'Copilot credits'
+        : t.rates_per_million ? 'opencode catalog'
         : t.cost?.per_million ? 'llm-audit prices.json'
         : 'Copilot credits',
   };
@@ -566,9 +576,12 @@ function faixaTarifa(t, cred) {
   if (gravado === 'over_200k') return { over: 200_000, fonte: 'log' };
   const m = /^context>(\d+)$/.exec(gravado);
   if (m) return { over: +m[1], fonte: 'log' };
-  // 'base', empty, or a name written after this was released: say nothing rather
-  // than guess at what it meant.
-  if (gravado) return null;
+  // A name written after this was released: say nothing rather than guess at
+  // what it meant. `base` is not one of those. It is the log saying that no tier
+  // of the *provider's* applied, which is a different question from whether the
+  // turn passed Copilot's resale cut-off — and reading it as an answer to both
+  // hid every long-context band the credit table had already found.
+  if (gravado && gravado !== 'base') return null;
   return cred?.over ? { over: cred.over, fonte: 'derived' } : null;
 }
 
