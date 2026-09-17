@@ -367,17 +367,20 @@ const nfOpt = n => n == null ? '<span style="color:var(--faint)">—</span>' : n
 /** GitHub Copilot bills in credits, and one credit is one US cent. The prices
  *  in the table below are credits per 1M tokens. */
 const CREDIT_USD = 0.01;
-/** Money. Under a dollar it shows four decimals rather than two, because that is
- *  where these sessions live: at two decimals a session that cost $0.057 reads
- *  as $0.06 and a turn that cost $0.034 reads as $0.03 — a rounding worth more
- *  than a tenth of the number it is rounding. The tables already ask for four;
- *  the cut-off used to be a cent, which left the whole range between a cent and
- *  a dollar to the coarse form and made the sidebar disagree with them. */
+/** Money, at four decimals whatever the size of the number. Two is where the
+ *  cents go missing, and not one at a time: every row of a table rounds away up
+ *  to half a cent of its own, while the total beside them is summed at full
+ *  precision and rounds once — so the rows never add up to the figure printed
+ *  above them, and they miss it by more the more rows there are. Two days of
+ *  logs here add up to $114.57 across eighteen session rows, under a total that
+ *  reads $114.56: seven tenths of a cent that belong to no row on the screen.
+ *  Four decimals is what the turn rows already asked for; carrying it up into
+ *  the sums is what makes a column add up to its own total.
+ *
+ *  `d` is for the figures that are not sums: the published TraceLab references
+ *  are round numbers, and $0.1100 would be precision they do not have. */
 const money = (n, d) => n == null ? '\u2014'
-  : '$' + n.toLocaleString('en-US', (() => {
-      const c = d ?? (n > 0 && n < 1 ? 4 : 2);
-      return { minimumFractionDigits: c, maximumFractionDigits: c };
-    })());
+  : '$' + n.toLocaleString('en-US', { minimumFractionDigits: d ?? 4, maximumFractionDigits: d ?? 4 });
 const secs = n => n == null ? '\u2014' : n.toFixed(2) + 's';
 /** Readable interval. A pause between turns can be seconds or hours, and
  *  "38646.85s" tells nobody that the session slept until the next day. */
@@ -2921,7 +2924,7 @@ function renderFolderOverview() {
   wrap.append(el('div', 'grid2',
     // The money first here, unlike the session screen: on the folder it is the
     // reason the screen exists, not a detail beside the turn list.
-    (comCusto ? K(money(tot.cost, 2), 'Total cost', 'var(--green)') : '') +
+    (comCusto ? K(money(tot.cost), 'Total cost', 'var(--green)') : '') +
     K(nf(sessoes.length), 'Sessions') +
     K(nf(tot.pedidos), 'User requests') +
     K(nf(tot.turns), 'Turns') +
@@ -2935,10 +2938,10 @@ function renderFolderOverview() {
     // Per request, because that is the unit a person spends in: whether a thing
     // asked for costs a dollar or ten is the reading, not the folder's total.
     (comCusto && tot.pedidos
-      ? K(money(tot.cost / tot.pedidos, 2),
+      ? K(money(tot.cost / tot.pedidos),
           'Cost per request',
           tot.cost / tot.pedidos > REF_REQUEST_USD ? 'var(--yellow)' : 'var(--green)') : '') +
-    (comCusto && dias.length ? K(money(tot.cost / dias.length, 2), 'Cost per day') : '') +
+    (comCusto && dias.length ? K(money(tot.cost / dias.length), 'Cost per day') : '') +
     K(dur(tot.elapsed), 'Summed call time') +
     K(nf(tot.errors), 'Errors', tot.errors ? 'var(--red)' : 'var(--green)') +
     // Every prefix break is a cache miss over the whole history behind it: on a
@@ -2948,7 +2951,7 @@ function renderFolderOverview() {
     (tot.retries ? K(nf(tot.retries), 'Retried turns', 'var(--red)') : '') +
     (tot.sub_turns ? K(nf(tot.sub_turns), 'Subagent turns', 'var(--purple)') : '') +
     (maisCara?.cost
-      ? K(money(maisCara.cost, 2),
+      ? K(money(maisCara.cost),
           `Dearest session (${esc(maisCara.projeto ?? semData(maisCara.id))})`, 'var(--orange)') : '')
   ));
 
@@ -2973,7 +2976,7 @@ function renderFolderOverview() {
       const row = el('div', 'daybar');
       row.innerHTML = `<span class="d">${esc(rotuloDia(d.quando))}</span>
         <span class="mini"><i style="width:${max ? pctOf(d.cost ?? 0, max).toFixed(2) : 0}%"></i></span>
-        <span class="amt">${money(d.cost, 2)}</span>`;
+        <span class="amt">${money(d.cost)}</span>`;
       row.title = `${d.sessoes.length} session(s) · ${d.pedidos} request(s) · ${
         nf(d.turns)} turn(s) · ${nf(d.total)} tk`;
       box.append(row);
@@ -3005,7 +3008,7 @@ function renderFolderOverview() {
         (g.cache_hit_rate * 100).toFixed(1)}% cache</span>` : ''}${
       g.elapsed ? ` · ${dur(g.elapsed)}` : ''}${
       g.errors ? ` · <span style="color:var(--red)">${g.errors} error(s)</span>` : ''}${
-      comCusto && g.cost != null ? ` · <b>${money(g.cost, 2)}</b>` : ''}</td>`;
+      comCusto && g.cost != null ? ` · <b>${money(g.cost)}</b>` : ''}</td>`;
     tb.append(band);
     for (const { s, r } of g.sessoes) {
       const tr = el('tr', 'clickable');
@@ -3044,7 +3047,7 @@ function renderFolderOverview() {
         <td class="num">${dur(r.elapsed)}</td>
         ${comCusto ? `<td class="num"${r.sem_preco
           ? ` title="${r.sem_preco} turn(s) with no rate: they count in the tokens, not in the cost"` : ''}>${
-          r.cost != null ? money(r.cost, 2) : '—'
+          r.cost != null ? money(r.cost) : '—'
         }${r.sem_preco ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}`;
       // The table is the way into a session, which is the reason it is the screen
       // the folder opens on.
