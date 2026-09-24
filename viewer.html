@@ -1453,11 +1453,17 @@ function somarGrupos(alvo, gs) {
   return alvo;
 }
 
-/** One database file, opened, with three temp tables every step above a
- *  session reads from: `raiz` says which conversation each session files under
- *  (a subagent under whoever spawned it, as the plugin files it), `passo` is one
- *  row per request with its numbers pulled out of the JSON, and `resumo` is one
- *  row per conversation, with the local day it began on. */
+/** One database file, opened, with the temp tables every step above a session
+ *  reads from: `raiz` says which conversation each session files under (a
+ *  subagent under whoever spawned it, as the plugin files it), `usuario` numbers
+ *  the requests in each conversation, `passo` is one row per request to the
+ *  model with its numbers pulled out of the JSON and the local day it ran on,
+ *  `resumo` is one row per conversation per day it ran, and `sessao` one row per
+ *  conversation.
+ *
+ *  A day is the requests that ran on it. A session resumed the morning after is
+ *  on both days, each with its own part — which is what the bill of that day
+ *  was, and what a query over `message` by its own date answers. */
 function abrirBase(SQL, a, wal) {
   const db = new SQL.Database(aplicarWal(a.bytes, wal?.bytes));
   try {
@@ -1468,6 +1474,28 @@ function abrirBase(SQL, a, wal) {
           UNION ALL SELECT s.id, r.root FROM session s JOIN r ON s.parent_id = r.id)
         SELECT id, root FROM r;
       CREATE INDEX temp.raiz_root ON raiz(root);
+      -- The request each message of the person belongs to, numbered the way
+      -- \`pedidos\` folds them once the turns are read: a prompt sent again as it
+      -- was (the retry after an error) is the same request, and a message with
+      -- no words of its own opens none.
+      CREATE TEMP TABLE usuario AS
+        WITH u AS (
+          SELECT u.id, u.session_id, u.time_created,
+            (SELECT trim(json_extract(x.data, '$.text')) FROM part x
+              WHERE x.message_id = u.id AND json_extract(x.data, '$.type') = 'text'
+                AND NOT coalesce(json_extract(x.data, '$.ignored'), 0)
+                AND trim(coalesce(json_extract(x.data, '$.text'), '')) <> ''
+              ORDER BY x.id LIMIT 1) AS t
+          FROM message u
+          WHERE u.session_id IN (SELECT id FROM raiz WHERE id = root)
+            AND json_extract(u.data, '$.role') = 'user'),
+        novo AS (
+          SELECT id, t IS NOT lag(t) OVER (PARTITION BY session_id ORDER BY time_created, id) AS abre
+          FROM u WHERE t IS NOT NULL)
+        SELECT u.id, sum(coalesce(novo.abre, 0))
+                     OVER (PARTITION BY u.session_id ORDER BY u.time_created, u.id) AS pedido
+        FROM u LEFT JOIN novo ON novo.id = u.id;
+      CREATE INDEX temp.usuario_id ON usuario(id);
       CREATE TEMP TABLE passo AS
         SELECT r.root, m.session_id AS sid,
           json_extract(m.data, '$.providerID') AS provider, json_extract(m.data, '$.modelID') AS model,
@@ -1480,46 +1508,41 @@ function abrirBase(SQL, a, wal) {
           coalesce(json_extract(m.data, '$.cost'), 0) AS cost,
           json_extract(m.data, '$.error.name') AS erro,
           json_extract(m.data, '$.time.created') AS criado,
-          json_extract(m.data, '$.time.completed') AS feito
+          json_extract(m.data, '$.time.completed') AS feito,
+          date(json_extract(m.data, '$.time.created') / 1000, 'unixepoch', 'localtime') AS dia,
+          -- Only the conversation's own turns carry a request; a subagent's run
+          -- inside whichever one spawned it.
+          CASE WHEN m.session_id = r.root THEN (SELECT pedido FROM usuario
+            WHERE usuario.id = json_extract(m.data, '$.parentID')) END AS pedido
         FROM message m JOIN raiz r ON r.id = m.session_id
         WHERE json_extract(m.data, '$.role') = 'assistant';
-      CREATE INDEX temp.passo_root ON passo(root);
-      -- What the person asked for, counted the way \`pedidos\` folds it once the
-      -- turns are read: a prompt sent again as it was (the retry after an error)
-      -- is the same request, and a message with no words of its own opens none.
-      CREATE TEMP TABLE pedido AS
-        SELECT session_id AS root, count(*) AS n FROM (
-          SELECT session_id, t, lag(t) OVER (PARTITION BY session_id ORDER BY time_created, id) AS antes
-          FROM (SELECT u.id, u.session_id, u.time_created,
-                  (SELECT trim(json_extract(x.data, '$.text')) FROM part x
-                    WHERE x.message_id = u.id AND json_extract(x.data, '$.type') = 'text'
-                      AND NOT coalesce(json_extract(x.data, '$.ignored'), 0)
-                      AND trim(coalesce(json_extract(x.data, '$.text'), '')) <> ''
-                    ORDER BY x.id LIMIT 1) AS t
-                FROM message u
-                WHERE u.session_id IN (SELECT id FROM raiz WHERE id = root)
-                  AND json_extract(u.data, '$.role') = 'user')
-          WHERE t IS NOT NULL)
-        WHERE t IS NOT antes GROUP BY session_id;
+      CREATE INDEX temp.passo_dia ON passo(dia, root);
       CREATE TEMP TABLE resumo AS
-        SELECT p.root AS id, s.title, s.directory, s.time_created AS aberta,
-          date(min(p.criado) / 1000, 'unixepoch', 'localtime') AS dia,
+        SELECT p.root AS id, p.dia, s.title, s.directory, s.time_created AS aberta,
           min(p.criado) AS inicio, max(coalesce(p.feito, p.criado)) AS fim,
           count(*) AS turns, sum(p.sid <> p.root) AS sub_turns,
           sum(p.erro IS NOT NULL AND p.erro <> 'MessageAbortedError') AS errors,
           sum(p.agent = 'compaction') AS compactacoes,
           sum(coalesce(p.feito - p.criado, 0)) / 1000.0 AS elapsed,
-          coalesce((SELECT n FROM pedido WHERE pedido.root = p.root), 0) AS pedidos
+          -- A request that ran past midnight is worked on both days, as it is
+          -- once its turns are read and split by the day they ran on.
+          count(DISTINCT CASE WHEN p.pedido > 0 THEN p.pedido END) AS pedidos
         FROM passo p JOIN session s ON s.id = p.root
-        GROUP BY p.root;
-      CREATE INDEX temp.resumo_dia ON resumo(dia);`);
+        GROUP BY p.root, p.dia;
+      CREATE INDEX temp.resumo_dia ON resumo(dia);
+      CREATE TEMP TABLE sessao AS
+        SELECT id, min(inicio) AS inicio, count(*) AS ndias, sum(turns) AS turns FROM resumo GROUP BY id;
+      CREATE INDEX temp.sessao_id ON sessao(id);`);
   } catch (e) { db.close(); throw new Error(`${a.name} is not an opencode database (${e.message})`); }
   return { nome: a.name, db };
 }
 
-/** Step one: one row per day, the databases added together. */
+/** Step one: one row per day, the databases added together. `n` on a day is the
+ *  sessions that ran on it; the folder's own count is of sessions, once each,
+ *  however many days they ran on. */
 function diasDasBases(bases) {
   const map = new Map(), cwds = new Set();
+  let n = 0;
   for (const { db } of bases) {
     for (const r of linhas(db, `SELECT dia, count(*) AS n, sum(turns) AS turns, sum(pedidos) AS pedidos,
         sum(errors) AS errors, sum(sub_turns) AS sub_turns, sum(compactacoes) AS compactacoes,
@@ -1530,15 +1553,16 @@ function diasDasBases(bases) {
       g.inicio = Math.min(g.inicio, r.inicio);
       map.set(r.dia, g);
     }
-    for (const r of linhas(db, `SELECT r.dia, ${GRUPO_SQL} FROM passo p JOIN resumo r ON r.id = p.root
-        GROUP BY r.dia, p.provider, p.model, banda`)) map.get(r.dia)?.grupos.push(r);
+    for (const r of linhas(db, `SELECT p.dia, ${GRUPO_SQL} FROM passo p
+        GROUP BY p.dia, p.provider, p.model, banda`)) map.get(r.dia)?.grupos.push(r);
     for (const r of linhas(db, 'SELECT DISTINCT directory FROM resumo')) if (r.directory) cwds.add(r.directory);
+    n += linhas(db, 'SELECT count(*) AS n FROM sessao')[0]?.n ?? 0;
   }
   const dias = [...map.values()].sort((a, b) => b.dia.localeCompare(a.dia));
   for (const g of dias) { somarGrupos(g, g.grupos); g.quando = new Date(g.inicio); g.elapsed ||= null; delete g.grupos; }
-  const tot = somarGrupos({}, []);
+  const tot = somarGrupos({ n }, []);
   for (const g of dias) {
-    for (const f of ['n', 'turns', 'pedidos', 'errors', 'sub_turns', 'input', 'cache_read', 'cache_write',
+    for (const f of ['turns', 'pedidos', 'errors', 'sub_turns', 'input', 'cache_read', 'cache_write',
                      'output', 'reasoning', 'total', 'cost']) tot[f] = (tot[f] ?? 0) + (g[f] ?? 0);
     tot.elapsed = (tot.elapsed ?? 0) + (g.elapsed ?? 0);
     g.models.forEach(m => tot.models.add(m));
@@ -1549,20 +1573,25 @@ function diasDasBases(bases) {
   return { dias, tot, cwds: [...cwds] };
 }
 
-/** Step two: a day's conversations, as summary rows shaped like `resumoSessao`'s
- *  — which answers with this one until the session is opened. What only the
- *  turns can say (prefix breaks, retries) stays unknown here, not zero. */
+/** Step two: what each conversation did on this day, as rows shaped like
+ *  `resumoSessao`'s. The conversations join `S.sessions` once each, unread;
+ *  the rows are kept by day, since one session can have a row on several.
+ *  What only the turns can say (prefix breaks, retries) stays unknown here,
+ *  not zero. */
 function sessoesDoDia(dia) {
-  const out = [];
+  const linhasDia = [];
   for (const base of S.db.bases) {
     const gs = new Map();
-    for (const g of linhas(base.db, `SELECT p.root, ${GRUPO_SQL} FROM passo p JOIN resumo r ON r.id = p.root
-        WHERE r.dia = ? GROUP BY p.root, p.provider, p.model, banda`, [dia])) {
+    for (const g of linhas(base.db, `SELECT p.root, ${GRUPO_SQL} FROM passo p
+        WHERE p.dia = ? GROUP BY p.root, p.provider, p.model, banda`, [dia])) {
       if (!gs.has(g.root)) gs.set(g.root, []);
       gs.get(g.root).push(g);
     }
-    for (const r of linhas(base.db, 'SELECT * FROM resumo WHERE dia = ?', [dia])) {
+    for (const r of linhas(base.db, `SELECT r.*, x.inicio AS comeco, x.ndias, x.turns AS turns_sessao
+        FROM resumo r JOIN sessao x ON x.id = r.id WHERE r.dia = ?`, [dia])) {
       const id = pastaDe({ id: r.id, time_created: r.aberta });
+      if (!S.sessions.some(s => s.id === id))
+        S.sessions.push({ id, summary: null, turns: [], _db: { base, root: r.id }, _turnsDb: r.turns_sessao });
       const res = somarGrupos({
         id, quando: new Date(r.inicio), ultima: new Date(r.fim), dia: r.dia,
         cwd: r.directory, titulo: r.title || null, titulo_fonte: 'session',
@@ -1572,10 +1601,34 @@ function sessoesDoDia(dia) {
         turns: r.turns, sem_preco: 0, sem_contagem: 0,
       }, gs.get(r.id) ?? []);
       res.models = [...res.models];
-      out.push({ id, summary: null, turns: [], _db: { base, root: r.id, dia }, _resumoDb: res });
+      linhasDia.push({ id, r: { ...res, ...diasDaSessao(r.comeco, r.ndias, dia) } });
     }
   }
-  return out;
+  return linhasDia;
+}
+
+/** Where a row stands in a session that ran on more than one day: `desde` is the
+ *  day it began, when that is not this row's day. */
+function diasDaSessao(comeco, ndias, dia) {
+  const d = new Date(comeco);
+  return { ndias, desde: chaveDia(d) !== dia ? d : null };
+}
+
+/** An opened session's row for one day: its summary over the turns that ran on
+ *  that day, so the row reads the same before and after the session is read —
+ *  now with what only the turns can say. Kept per day on the session, which is
+ *  rebuilt whole on every read, so the memo goes with the turns it came from. */
+function fatiaDoDia(s, dia, sql) {
+  const extra = { ndias: sql.ndias, desde: sql.desde };
+  if (sql.ndias === 1) return { ...resumoSessao(s), ...extra };
+  s._fatias ??= new Map();
+  let f = s._fatias.get(dia);
+  if (!f) {
+    f = { id: s.id, summary: null, index: s.index, tools: [],
+          turns: s.turns.filter(t => t.started_at && chaveDia(new Date(t.started_at)) === dia) };
+    s._fatias.set(dia, f);
+  }
+  return { ...resumoSessao(f), ...extra };
 }
 
 /* ---------- step three: one conversation, parsed ---------- */
@@ -1727,7 +1780,7 @@ function carregarSessaoDb(stub) {
   });
   // A new object, not the stub filled in: every memo taken on the stub
   // (`_pedidos`, `_resumo`) was taken with no turns, and cannot be unset.
-  const s = { id: stub.id, summary: null, turns, tools: jornal, _db: stub._db, _resumoDb: stub._resumoDb,
+  const s = { id: stub.id, summary: null, turns, tools: jornal, _db: stub._db, _turnsDb: stub._turnsDb,
               index: { session: root, title: sessoes.get(root)?.title, title_source: 'session', updated_at: iso(fim) } };
   repairReuse([s]);
   S.sessions[S.sessions.indexOf(stub)] = s;
@@ -1749,7 +1802,8 @@ async function montarDb(arquivos, reler) {
     }
   } catch (e) { bases.forEach(b => b.db.close()); throw e; }
   fecharDb();
-  S.db = { bases, reler, abertos: new Set(), carregados: new Set(), ...diasDasBases(bases) };
+  // `linhas`: each day opened, and its rows — one per session that ran on it.
+  S.db = { bases, reler, abertos: new Set(), linhas: new Map(), ...diasDasBases(bases) };
   S.sessions = []; S.reload = null;
 }
 const fecharDb = () => { S.db?.bases.forEach(b => b.db.close()); S.db = null; };
@@ -1757,9 +1811,8 @@ const fecharDb = () => { S.db?.bases.forEach(b => b.db.close()); S.db = null; };
 /** Step two, without drawing: the day's sessions join the list. */
 function abrirDia(dia) {
   S.db.abertos.add(dia);
-  if (S.db.carregados.has(dia)) return;
-  S.db.carregados.add(dia);
-  S.sessions.push(...sessoesDoDia(dia));
+  if (S.db.linhas.has(dia)) return;
+  S.db.linhas.set(dia, sessoesDoDia(dia));
   S.sessions.sort((a, b) => b.id.localeCompare(a.id));
 }
 
@@ -3133,7 +3186,7 @@ function renderSessionSelect() {
   sel.innerHTML = (S.sid == null ? `<option value="">${S.sessions.length
       ? '— pick a session —' : '— open a day in the folder —'}</option>` : '')
     + S.sessions.map(s =>
-      `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length || s._resumoDb?.turns || 0} turns</option>`).join('');
+      `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length || s._turnsDb || 0} turns</option>`).join('');
   sel.value = S.sid ?? '';
   // Picking a session up here is asking to go into it, not to keep looking at
   // the folder that holds it.
@@ -3505,8 +3558,6 @@ const DERIVADO = 'name cut from the first prompt, not one the harness gave';
  *  the data it was taken from. */
 function resumoSessao(s) {
   if (s._resumo) return s._resumo;
-  // A database session not opened yet: the row SQL already summed for it.
-  if (!s.turns.length && s._resumoDb) return s._resumoDb;
   const b = buckets(s.turns, () => '_')?._
     ?? { turns: s.turns.length, input: 0, cache_read: 0, cache_write: 0, output: 0,
          reasoning: 0, total: 0, cost: null, cache_hit_rate: null, sem_preco: 0, sem_contagem: 0 };
@@ -3643,8 +3694,12 @@ function modeloDb(casa) {
   const D = S.db;
   const dias = D.dias.map(g => {
     const aberto = D.abertos.has(g.dia);
-    return { ...g, aberto, sessoes: !aberto ? [] : S.sessions.filter(s => s._db?.dia === g.dia)
-      .map(s => ({ s, r: resumoSessao(s) })).filter(x => casa(x.r))
+    return { ...g, aberto, sessoes: !aberto ? [] : (D.linhas.get(g.dia) ?? []).map(({ id, r }) => {
+        // The row SQL summed, until the session is read; then the same row over
+        // its turns, with what only they can say.
+        const s = S.sessions.find(x => x.id === id);
+        return { s, r: s.turns.length ? fatiaDoDia(s, g.dia, r) : r };
+      }).filter(x => casa(x.r))
       .sort((a, b) => (b.r.quando ?? 0) - (a.r.quando ?? 0)) };
   });
   return {
@@ -3807,7 +3862,11 @@ function renderFolderOverview() {
           ${r.retries ? `<span class="chip red" title="turns that repeated an already-refused prompt: paid for twice">${
             r.retries} retry</span>` : ''}
           ${r.compactacoes ? `<span class="chip yellow" title="times the history was rewritten">${
-            r.compactacoes}× compact</span>` : ''}</span></td>
+            r.compactacoes}× compact</span>` : ''}
+          ${r.ndias > 1 ? `<span class="chip cyan" title="the session ran on ${r.ndias} days${
+            r.desde ? `, beginning ${esc(rotuloDia(r.desde))}` : ''}: this row is only what ran on this one, and the row opens all of it">${
+            r.desde ? '↳ from ' + esc(r.desde.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }))
+                    : `1 of ${r.ndias} days`}</span>` : ''}</span></td>
         ${comModelo ? `<td style="white-space:nowrap">${r.models.map(m => esc(m)).join(', ') || '—'}</td>` : ''}
         <td class="num"${r.sem_contagem
           ? ` title="${r.sem_contagem} turn(s) with no usage: they count here, but have no tokens"` : ''}>${
