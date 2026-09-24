@@ -655,10 +655,28 @@ function componentes(t) {
   };
 }
 
-/** With no rate to price the tokens, the figure opencode stored for the turn —
- *  its own catalog's, taken at the time, as a sum with no parts. Only the
- *  database carries it; a log never does. */
+/** A Copilot turn read from opencode's database, with the bill Copilot itself
+ *  sent. opencode stores `copilot_usage.total_nano_aiu` as the message's cost
+ *  when the stream carries it — and that is the one figure there with the cache
+ *  writes in it: opencode's Copilot client throws the write counter away, so
+ *  the written tokens reach the database as input, and the credit table would
+ *  price them at the input rate. Zero is not a bill: it is the catalog's price
+ *  for a subscription, and the credit table stays the better reading of it. */
+const cobradoCopilot = t => t.source === 'opencode-db' && isCopilot(t) && t.recorded_cost > 0;
+
+/** The same client is why a Copilot turn from the database has no cache write:
+ *  not zero, never counted — the tokens it wrote are inside `input`. */
+const semEscrita = t => t.source === 'opencode-db' && isCopilot(t);
+const SEM_ESCRITA = 'opencode does not record cache writes for GitHub Copilot: its Copilot client drops '
+  + 'the counter, so the written tokens are counted as input. The cost is Copilot’s own bill where '
+  + 'opencode stored it, and the credit table otherwise, at the input rate for those tokens';
+
+/** Copilot's own bill first, where the database has it (above). Then the
+ *  rates. With no rate to price the tokens, the figure opencode stored for the
+ *  turn — its own catalog's, taken at the time, as a sum with no parts. Only
+ *  the database carries it; a log never does. */
 function custo(t) {
+  if (cobradoCopilot(t)) return t.recorded_cost;
   const p = componentes(t); if (!p) return t.recorded_cost ?? null;
   return p.input + p.cache_read + p.cache_write + p.output;
 }
@@ -862,8 +880,9 @@ function reguaFaixas(refs, turns) {
 /** Where this session's cost came from, so the screen can name the currency.
  *  When both sources show up in the same session the name says both: adding
  *  resale to list price gives a number that is neither of the two things. */
+const COPILOT_COBRADO = 'Copilot bill (opencode db)';
 function fonteCusto(turns) {
-  const fs = [...new Set(turns.map(t => tarifas(t)?.base
+  const fs = [...new Set(turns.map(t => cobradoCopilot(t) ? COPILOT_COBRADO : tarifas(t)?.base
     ?? (t.recorded_cost != null ? 'opencode db (stored cost)' : null)).filter(Boolean))];
   return fs.length ? fs.join(' + ') : null;
 }
@@ -1420,13 +1439,15 @@ const PROMPT_SQL = 'p.input + p.cache_read + p.cache_write';
 const GRUPO_SQL = `p.provider, p.model,
   CASE ${CORTES.map((c, i) => `WHEN ${PROMPT_SQL} > ${c} THEN ${i + 1}`).reverse().join(' ')} ELSE 0 END AS banda,
   sum(p.input) AS input, sum(p.cache_read) AS cache_read, sum(p.cache_write) AS cache_write,
+  p.cost > 0 AS cobrado,
   sum(p.output + p.reasoning) AS output, sum(p.reasoning) AS reasoning, sum(p.cost) AS cost`;
 
 /** What a group of turns cost, by the rule `custo` applies to each of them:
- *  Copilot's credit table where it has the model, opencode's stored figure
- *  everywhere else. */
+ *  on Copilot, the bill it sent when there is one and the credit table where it
+ *  has the model; opencode's stored figure everywhere else. */
 function custoGrupo(g) {
   if (isCopilot(g)) {
+    if (g.cobrado) return g.cost;
     const hit = copilotPrice(g.model, g.banda ? CORTES[g.banda - 1] + 1 : 0);
     if (hit) {
       const p = hit.p;
@@ -1440,12 +1461,13 @@ function custoGrupo(g) {
 /** Token and money sums into `alvo`, from the groups above. */
 function somarGrupos(alvo, gs) {
   for (const f of ['input', 'cache_read', 'cache_write', 'output', 'reasoning']) alvo[f] = 0;
-  alvo.cost = 0; alvo.models = new Set(); alvo.copilot = false;
+  alvo.cost = 0; alvo.models = new Set(); alvo.copilot = false; alvo.cobrado = false;
   for (const g of gs) {
     for (const f of ['input', 'cache_read', 'cache_write', 'output', 'reasoning']) alvo[f] += g[f] ?? 0;
     alvo.cost += custoGrupo(g) ?? 0;
     if (g.model) alvo.models.add(g.model);
-    if (isCopilot(g) && copilotPrice(g.model, 0)) alvo.copilot = true;
+    if (isCopilot(g) && g.cobrado) alvo.cobrado = true;
+    else if (isCopilot(g) && copilotPrice(g.model, 0)) alvo.copilot = true;
   }
   const prompt = alvo.input + alvo.cache_read + alvo.cache_write;
   alvo.total = prompt + alvo.output;
@@ -1523,6 +1545,7 @@ function abrirBase(SQL, a, wal) {
           count(*) AS turns, sum(p.sid <> p.root) AS sub_turns,
           sum(p.erro IS NOT NULL AND p.erro <> 'MessageAbortedError') AS errors,
           sum(p.agent = 'compaction') AS compactacoes,
+          sum(lower(coalesce(p.provider, '')) LIKE '%copilot%') AS cw_sem,
           sum(coalesce(p.feito - p.criado, 0)) / 1000.0 AS elapsed,
           -- A request that ran past midnight is worked on both days, as it is
           -- once its turns are read and split by the day they ran on.
@@ -1546,15 +1569,16 @@ function diasDasBases(bases) {
   for (const { db } of bases) {
     for (const r of linhas(db, `SELECT dia, count(*) AS n, sum(turns) AS turns, sum(pedidos) AS pedidos,
         sum(errors) AS errors, sum(sub_turns) AS sub_turns, sum(compactacoes) AS compactacoes,
-        sum(elapsed) AS elapsed, min(inicio) AS inicio FROM resumo GROUP BY dia`)) {
+        sum(cw_sem) AS cw_sem, sum(elapsed) AS elapsed, min(inicio) AS inicio FROM resumo GROUP BY dia`)) {
       const g = map.get(r.dia) ?? { dia: r.dia, n: 0, turns: 0, pedidos: 0, errors: 0, sub_turns: 0,
-                                    compactacoes: 0, elapsed: 0, inicio: r.inicio, grupos: [] };
-      for (const f of ['n', 'turns', 'pedidos', 'errors', 'sub_turns', 'compactacoes', 'elapsed']) g[f] += r[f] ?? 0;
+                                    compactacoes: 0, cw_sem: 0, elapsed: 0, inicio: r.inicio, grupos: [] };
+      for (const f of ['n', 'turns', 'pedidos', 'errors', 'sub_turns', 'compactacoes', 'cw_sem', 'elapsed'])
+        g[f] += r[f] ?? 0;
       g.inicio = Math.min(g.inicio, r.inicio);
       map.set(r.dia, g);
     }
     for (const r of linhas(db, `SELECT p.dia, ${GRUPO_SQL} FROM passo p
-        GROUP BY p.dia, p.provider, p.model, banda`)) map.get(r.dia)?.grupos.push(r);
+        GROUP BY p.dia, p.provider, p.model, banda, cobrado`)) map.get(r.dia)?.grupos.push(r);
     for (const r of linhas(db, 'SELECT DISTINCT directory FROM resumo')) if (r.directory) cwds.add(r.directory);
     n += linhas(db, 'SELECT count(*) AS n FROM sessao')[0]?.n ?? 0;
   }
@@ -1562,11 +1586,12 @@ function diasDasBases(bases) {
   for (const g of dias) { somarGrupos(g, g.grupos); g.quando = new Date(g.inicio); g.elapsed ||= null; delete g.grupos; }
   const tot = somarGrupos({ n }, []);
   for (const g of dias) {
-    for (const f of ['turns', 'pedidos', 'errors', 'sub_turns', 'input', 'cache_read', 'cache_write',
+    for (const f of ['turns', 'pedidos', 'errors', 'sub_turns', 'cw_sem', 'input', 'cache_read', 'cache_write',
                      'output', 'reasoning', 'total', 'cost']) tot[f] = (tot[f] ?? 0) + (g[f] ?? 0);
     tot.elapsed = (tot.elapsed ?? 0) + (g.elapsed ?? 0);
     g.models.forEach(m => tot.models.add(m));
     tot.copilot ||= g.copilot;
+    tot.cobrado ||= g.cobrado;
   }
   const prompt = tot.input + tot.cache_read + tot.cache_write;
   tot.cache_hit_rate = prompt ? tot.cache_read / prompt : null;
@@ -1583,7 +1608,7 @@ function sessoesDoDia(dia) {
   for (const base of S.db.bases) {
     const gs = new Map();
     for (const g of linhas(base.db, `SELECT p.root, ${GRUPO_SQL} FROM passo p
-        WHERE p.dia = ? GROUP BY p.root, p.provider, p.model, banda`, [dia])) {
+        WHERE p.dia = ? GROUP BY p.root, p.provider, p.model, banda, cobrado`, [dia])) {
       if (!gs.has(g.root)) gs.set(g.root, []);
       gs.get(g.root).push(g);
     }
@@ -1597,7 +1622,7 @@ function sessoesDoDia(dia) {
         cwd: r.directory, titulo: r.title || null, titulo_fonte: 'session',
         projeto: r.directory ? r.directory.split('/').filter(Boolean).pop() : null, branch: null,
         errors: r.errors, pedidos: r.pedidos, sub_turns: r.sub_turns, retries: 0,
-        compactacoes: r.compactacoes, prefix_breaks: null, elapsed: r.elapsed || null,
+        compactacoes: r.compactacoes, cw_sem: r.cw_sem, prefix_breaks: null, elapsed: r.elapsed || null,
         turns: r.turns, sem_preco: 0, sem_contagem: 0,
       }, gs.get(r.id) ?? []);
       res.models = [...res.models];
@@ -3594,6 +3619,7 @@ function resumoSessao(s) {
     sub_turns: s.turns.filter(isSub).length,
     retries: s.turns.filter(t => t.retry_of != null).length,
     compactacoes: s.turns.filter(t => t.compaction).length,
+    cw_sem: s.turns.filter(semEscrita).length,
     // Read off `t.reuse`, which `repairReuse` already filled in for every session
     // in the folder at ingest: no second pass over the bodies happens here.
     prefix_breaks: comReuso.length ? comReuso.filter(t => !t.reuse.prefix_stable).length : null,
@@ -3667,7 +3693,7 @@ function modeloPasta(casa) {
     turns: soma('turns'), pedidos: soma('pedidos'), total: soma('total'),
     input: soma('input'), cache_read: soma('cache_read'), cache_write: soma('cache_write'),
     output: soma('output'), errors: soma('errors'),
-    sub_turns: soma('sub_turns'), retries: soma('retries'),
+    sub_turns: soma('sub_turns'), retries: soma('retries'), cw_sem: soma('cw_sem'),
     cost: comCusto ? soma('cost') : null,
     elapsed: soma('elapsed') || null,
   };
@@ -3706,7 +3732,8 @@ function modeloDb(casa) {
     n: D.tot.n, dias, tot: { ...D.tot, retries: 0, prefix_breaks: null }, comCusto: true, todos: [],
     maisCara: null, datas: D.dias.map(g => g.quando).sort((a, b) => a - b),
     models: [...D.tot.models], cwds: D.cwds,
-    fonte: [D.tot.copilot ? 'Copilot credits' : null, 'opencode db (stored cost)'].filter(Boolean).join(' + '),
+    fonte: [D.tot.cobrado ? COPILOT_COBRADO : null, D.tot.copilot ? 'Copilot credits' : null,
+            'opencode db (stored cost)'].filter(Boolean).join(' + '),
   };
 }
 
@@ -3787,6 +3814,9 @@ function renderFolderOverview() {
       + `: the catalog recorded zero while there were tokens of that kind to bill, on ${furosTurnos} turn(s).`));
   // The part of the week's bill bought at a dearer unit price. Not a hole in the
   // total: a reading of it.
+  if (tot.cw_sem)
+    wrap.append(el('div', 'foot', `* C.write — ${nf(tot.cw_sem)} GitHub Copilot turn(s) with no cache write `
+      + `recorded, shown as — where a row has nothing else: ${esc(SEM_ESCRITA)}.`));
   if (faixaTurnos)
     wrap.append(el('div', 'foot', 'cost — '
       + `${faixaTurnos} of ${todos.length} turn(s) crossed a context cut-off and were billed at `
@@ -3874,7 +3904,10 @@ function renderFolderOverview() {
         <td class="num">${nf(r.pedidos)}</td>
         <td class="num">${nf(r.input)}</td>
         <td class="num" style="color:var(--cyan)">${nf(r.cache_read)}</td>
-        <td class="num" style="color:var(--yellow)">${nf(r.cache_write)}</td>
+        ${r.cw_sem && r.cw_sem >= r.turns
+          ? `<td class="num" style="color:var(--faint)" title="${esc(SEM_ESCRITA)}">—</td>`
+          : `<td class="num" style="color:var(--yellow)"${r.cw_sem ? ` title="${r.cw_sem} turn(s) with no cache write recorded — ${
+              esc(SEM_ESCRITA)}"` : ''}>${nf(r.cache_write)}${r.cw_sem ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>`}
         <td class="num" style="color:var(--purple)">${nf(r.output)}</td>
         <td class="num"><b>${nf(r.total)}</b></td>
         <td class="num" style="color:${corCache(r.cache_hit_rate) ?? 'var(--faint)'}">${
@@ -4240,6 +4273,8 @@ function renderTurnHead(t) {
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
       <span class="chip cyan"${t.source === 'opencode-db' ? ` title="${esc(DB_TIP)}"` : ''}>${esc(apiDe(t))}</span>
+      ${semEscrita(t) ? `<span class="chip yellow" title="${esc(SEM_ESCRITA)}">cache write not recorded</span>` : ''}
+      ${cobradoCopilot(t) ? `<span class="chip green" title="the cost is the bill Copilot sent with the reply (total_nano_aiu), as opencode stored it — not the credit table">Copilot bill</span>` : ''}
       ${variantOf(t) ? `<span class="chip" title="reasoning variant asked for on this turn">variant: ${esc(variantOf(t))}</span>` : ''}
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
       ${isSub(t) ? `<span class="chip purple solid" title="a session of its own on the wire (${esc(t.session ?? '?')}), filed in the folder of whoever spawned it">subagent of ${esc(shortId(parentOf(t)))}</span>` : ''}
