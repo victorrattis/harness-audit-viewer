@@ -325,13 +325,22 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
       <button class="btn primary" id="reopenBtn" hidden></button>
       <button class="btn" id="pickBtn">Select folder…</button>
     </div>
+    <div class="picks" style="margin-top:10px">
+      <button class="btn primary" id="reopenDbBtn" hidden></button>
+      <button class="btn" id="dbBtn" title="opencode.db, and opencode.db-wal beside it">Open opencode DB…</button>
+    </div>
     <input type="file" id="fileInput" webkitdirectory directory multiple hidden>
+    <input type="file" id="dbInput" multiple hidden>
     <div class="hint">
       Everything runs locally in the browser — no data leaves the machine.
       Once the folder is open, <b>⟳</b> re-reads it — new turns included — without asking again,
       and <b>↻</b> brings it back on the next visit.<br>
       Alternative: <code>python3 -m http.server 8000</code> in the folder, then open
-      <code>localhost:8000/viewer.html</code> (it loads by itself).<br>Formats: OpenCode (SSE stream) and harness-audit (final response).
+      <code>localhost:8000/viewer.html</code> (it loads by itself).<br>Formats: OpenCode (SSE stream) and harness-audit (final response).<br>
+      <b>Open opencode DB</b> reads what opencode itself stores, no plugin needed:
+      <code>~/.local/share/opencode/opencode.db</code> — pick <code>opencode.db-wal</code> with it, or the newest
+      turns stay out (<b>⌘⇧.</b> shows the hidden folder, <b>⌘⇧G</b> takes the path). It has the messages, tool
+      calls, tokens and cost, but no system prompt, tool schemas or headers. Loads sql.js from cdnjs.
     </div>
   </div>
 </div>
@@ -646,8 +655,11 @@ function componentes(t) {
   };
 }
 
+/** With no rate to price the tokens, the figure opencode stored for the turn —
+ *  its own catalog's, taken at the time, as a sum with no parts. Only the
+ *  database carries it; a log never does. */
 function custo(t) {
-  const p = componentes(t); if (!p) return null;
+  const p = componentes(t); if (!p) return t.recorded_cost ?? null;
   return p.input + p.cache_read + p.cache_write + p.output;
 }
 
@@ -665,7 +677,7 @@ function driverDe(t) {
  *  all. It holds for any provider: before, only Copilot was checked, and a turn
  *  from another provider with no recorded rate vanished from the total without a
  *  word — that is how the title call left the bill in silence. */
-const semPreco = t => !!t.usage?.total && tarifas(t) == null;
+const semPreco = t => !!t.usage?.total && tarifas(t) == null && t.recorded_cost == null;
 
 /** Components this turn paid for with a borrowed rate. */
 const furosDe = t => tarifas(t)?.furos ?? [];
@@ -851,7 +863,8 @@ function reguaFaixas(refs, turns) {
  *  When both sources show up in the same session the name says both: adding
  *  resale to list price gives a number that is neither of the two things. */
 function fonteCusto(turns) {
-  const fs = [...new Set(turns.map(t => tarifas(t)?.base).filter(Boolean))];
+  const fs = [...new Set(turns.map(t => tarifas(t)?.base
+    ?? (t.recorded_cost != null ? 'opencode db (stored cost)' : null)).filter(Boolean))];
   return fs.length ? fs.join(' + ') : null;
 }
 
@@ -874,6 +887,12 @@ const API_LABEL = {
 // rest it uses what the plugin already decoded.
 const NATIVE_API = new Set(['anthropic', 'openai-chat', 'openai-responses']);
 const apiLabel = a => API_LABEL[a] ?? a ?? '—';
+/** A turn rebuilt from opencode's database went out in whatever the provider
+ *  speaks; the body here is only Anthropic-shaped because that is what gets read. */
+const DB_API = 'opencode db · rebuilt';
+const DB_TIP = 'rebuilt from opencode’s database: the messages, tool calls, tokens and cost are what opencode '
+  + 'stored; the system prompt, tool schemas, headers and stream were never stored there';
+const apiDe = t => t.source === 'opencode-db' ? DB_API : apiLabel(t._api);
 
 /** Works out the API dialect from the body/events: the harness logs mix
  *  Anthropic Messages, OpenAI Chat Completions and OpenAI Responses. */
@@ -1209,8 +1228,16 @@ dz.addEventListener('drop', async e => {
   const items = [...e.dataTransfer.items];
   const pedidas = items.map(i => i.getAsFileSystemHandle?.() ?? Promise.resolve(null));
   const entries = items.map(i => i.webkitGetAsEntry?.()).filter(Boolean);
-  const handles = (await Promise.all(pedidas.map(p => Promise.resolve(p).catch(() => null))))
-    .filter(h => h?.kind === 'directory');
+  const dbs = [...e.dataTransfer.files].filter(f => ehDb(f.name));
+  const todos = await Promise.all(pedidas.map(p => Promise.resolve(p).catch(() => null)));
+  // opencode's database dropped as files, with or without its WAL.
+  if (dbs.length) {
+    const hs = todos.filter(h => h?.kind === 'file' && ehDb(h.name));
+    if (hs.length === dbs.length) return useDbHandles(hs);
+    S.reload = null;
+    return carregarDb(async () => lerDbs(await Promise.all(dbs.map(bytesDe))));
+  }
+  const handles = todos.filter(h => h?.kind === 'directory');
   // The handle re-reads the folder later; the entry API is the fallback for the
   // browsers that do not hand one over, and it too survives the drop.
   const read = handles.length
@@ -1282,6 +1309,339 @@ $('#fileInput').onchange = async e => {
   S.reload = null;                             // <input> hands over a snapshot; refresh has to ask again
   ingest(out);
 };
+
+/* =========================================================================
+   opencode's own database
+   =========================================================================
+ *  What opencode keeps of every session, without the plugin: `session`,
+ *  `message` — one assistant message per request to the model — and `part`,
+ *  the text, reasoning and tool calls inside each message. It is turned here
+ *  into the very files the plugin writes (turns, piece store, index, tool
+ *  journal) and handed to `ingest`, so every screen reads it the way it reads a
+ *  log folder, and ⟳ re-reads the database like it re-reads a folder.
+ *
+ *  What it cannot give is what never reaches the database: the system prompt,
+ *  the tool schemas, the headers and the stream. The request body is rebuilt
+ *  from the messages that went before, in Anthropic's shape whatever the
+ *  provider was — the shape `ctxStats` reads — and says so on screen. */
+const SQLJS = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.13.0/';
+let sqlJs = null;
+function carregarSqlJs() {
+  sqlJs ??= new Promise((ok, no) => {
+    const s = document.createElement('script');
+    s.src = SQLJS + 'sql-wasm.js';
+    s.onload = () => initSqlJs({ locateFile: f => SQLJS + f }).then(ok, no);
+    s.onerror = () => no(new Error('could not load sql.js from ' + SQLJS));
+    document.head.append(s);
+  });
+  // A failed load is not cached: offline now is not offline on the next click.
+  return sqlJs.catch(e => { sqlJs = null; throw e; });
+}
+
+const ehDb = name => /\.(db|sqlite3?)(-wal)?$/i.test(name);
+
+/** The database as SQLite would see it with its WAL applied. opencode runs in
+ *  WAL mode and keeps the file open, so the turns of the last hours are often
+ *  still in `-wal` and not in the database at all. Only frames up to the last
+ *  commit whose salts and running checksum hold are taken — the rest is a
+ *  transaction that never finished. The header is then marked rollback-journal,
+ *  so sql.js does not go looking for a WAL of its own. */
+function aplicarWal(db, wal) {
+  let out = db;
+  if (wal?.length >= 32) {
+    const dv = new DataView(wal.buffer, wal.byteOffset, wal.byteLength);
+    const magic = dv.getUint32(0);
+    if (magic === 0x377f0682 || magic === 0x377f0683) {
+      const le = magic === 0x377f0682, pg = dv.getUint32(8);
+      const salt1 = dv.getUint32(16), salt2 = dv.getUint32(20);
+      let s0 = 0, s1 = 0;
+      const soma = (de, n) => {
+        for (let i = de; i < de + n; i += 8) {
+          s0 = (s0 + dv.getUint32(i, le) + s1) >>> 0;
+          s1 = (s1 + dv.getUint32(i + 4, le) + s0) >>> 0;
+        }
+      };
+      soma(0, 24);
+      if (s0 === dv.getUint32(24) && s1 === dv.getUint32(28)) {
+        const frames = []; let feitos = 0, paginas = 0;
+        for (let off = 32; off + 24 + pg <= wal.length; off += 24 + pg) {
+          if (dv.getUint32(off + 8) !== salt1 || dv.getUint32(off + 12) !== salt2) break;
+          soma(off, 8); soma(off + 24, pg);
+          if (s0 !== dv.getUint32(off + 16) || s1 !== dv.getUint32(off + 20)) break;
+          frames.push(off);
+          const n = dv.getUint32(off + 4);   // pages after commit; 0 mid-transaction
+          if (n) { feitos = frames.length; paginas = n; }
+        }
+        if (feitos) {
+          out = new Uint8Array(paginas * pg);
+          out.set(db.subarray(0, Math.min(db.length, out.length)));
+          for (const off of frames.slice(0, feitos)) {
+            const p = dv.getUint32(off);
+            if (p <= paginas) out.set(wal.subarray(off + 24, off + 24 + pg), (p - 1) * pg);
+          }
+        }
+      }
+    }
+  }
+  if (out === db) out = db.slice();
+  if (out.length > 19) out[18] = out[19] = 1;
+  return out;
+}
+
+const linhas = (db, sql) => {
+  const r = db.exec(sql)[0];
+  return r ? r.values.map(v => Object.fromEntries(r.columns.map((c, i) => [c, v[i]]))) : [];
+};
+const json = s => { try { return JSON.parse(s); } catch { return null; } };
+const iso = ms => ms ? new Date(ms).toISOString() : null;
+
+/** The folder name the plugin gives a session: local start time, then the id. */
+function pastaDe(s) {
+  const d = new Date(s.time_created), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-`
+    + String(s.id).replace(/^ses_/, '').slice(0, 10);
+}
+
+/** A user message as it goes to the model. Text opencode marked `ignored` never
+ *  leaves; a compaction part is sent as the question that asks for the summary. */
+function blocosUsuario(ps) {
+  const out = [];
+  for (const p of ps) {
+    if (p.type === 'text' && !p.ignored && p.text) out.push({ type: 'text', text: p.text });
+    else if (p.type === 'file') out.push({ type: 'text', text: `[file: ${p.filename ?? p.url ?? '?'} · ${p.mime ?? '?'}]` });
+    else if (p.type === 'compaction') out.push({ type: 'text', text: 'What did we do so far?' });
+    else if (p.type === 'subtask') out.push({ type: 'text', text: p.prompt ?? '' });
+  }
+  return out;
+}
+
+/** What one step said, and the results of the tools it called — which go back to
+ *  the model as the next user message. */
+function blocosAssistente(ps) {
+  const blocos = [], resultados = [];
+  for (const p of ps) {
+    if (p.type === 'reasoning')
+      blocos.push({ type: 'thinking', thinking: p.text ?? '',
+                    ...(p.metadata?.anthropic?.signature ? { signature: p.metadata.anthropic.signature } : {}) });
+    else if (p.type === 'text' && p.text) blocos.push({ type: 'text', text: p.text });
+    else if (p.type === 'tool') {
+      const st = p.state ?? {};
+      blocos.push({ type: 'tool_use', id: p.callID, name: p.tool, input: st.input ?? {} });
+      const r = st.status === 'completed'
+        ? { content: st.time?.compacted ? '[Old tool result content cleared]' : (st.output ?? '') }
+        : st.status === 'error' ? { content: st.error ?? 'error', is_error: true }
+        : { content: '[Tool execution was interrupted]', is_error: true };
+      resultados.push({ type: 'tool_result', tool_use_id: p.callID, ...r });
+    }
+  }
+  return { blocos, resultados };
+}
+
+/** One session's requests, in order, each with the history it went out with. */
+function turnosDaSessao(ses, lista, partes, pecas, raiz, jornal) {
+  const peca = (h, b) => { pecas.set(h, b); return { $ref: h }; };
+  let hist = [], pedido = 0, ultimoUser = null, userInfo = null, compactacao = null;
+  const out = [];
+  for (const { id, info } of lista) {
+    const ps = partes.get(id) ?? [];
+    if (info.role === 'user') {
+      pedido++; userInfo = info;
+      const blocos = blocosUsuario(ps);
+      ultimoUser = blocos.length ? peca(id + ':u', { role: 'user', content: blocos }) : null;
+      if (ultimoUser) hist.push(ultimoUser);
+      const c = ps.find(p => p.type === 'compaction');
+      if (c) compactacao = { auto: c.auto ?? null, overflow: c.overflow ?? null, not_measured: true };
+      continue;
+    }
+    if (info.role !== 'assistant') continue;
+    const tk = info.tokens ?? {};
+    const inp = tk.input ?? 0, cr = tk.cache?.read ?? 0, cw = tk.cache?.write ?? 0;
+    // opencode counts reasoning beside the output; the provider bills it inside.
+    const rs = tk.reasoning ?? 0, saida = (tk.output ?? 0) + rs;
+    const prompt = inp + cr + cw;
+    // Stopped by the person: not a failure, a turn that never finished.
+    const abortado = info.error?.name === 'MessageAbortedError';
+    const erro = info.error && !abortado ? info.error : null;
+    const { blocos, resultados } = blocosAssistente(ps);
+    const sub = raiz !== ses.id;
+    out.push({
+      source: 'opencode-db',
+      session: ses.id, root_session: raiz, ...(sub ? { parent_session: ses.parent_id } : {}),
+      title: ses.title, cwd: info.path?.cwd ?? ses.directory,
+      agent: info.agent ?? info.mode ?? null,
+      provider: info.providerID, model: info.modelID,
+      variant: info.variant ?? userInfo?.model?.variant ?? userInfo?.variant ?? null,
+      request_index: sub ? null : pedido, user_message: info.parentID ?? null,
+      _t: info.time?.created ?? 0,
+      started_at: iso(info.time?.created),
+      elapsed_seconds: info.time?.completed ? (info.time.completed - info.time.created) / 1000 : null,
+      ...(abortado || (!info.time?.completed && !info.error) ? { incomplete: true } : {}),
+      ...(compactacao && info.agent !== 'compaction' ? { compaction: compactacao } : {}),
+      usage: erro && !prompt && !saida ? null : {
+        input: inp, cache_read: cr, cache_write: cw, output: saida, reasoning: rs,
+        prompt, total: prompt + saida, source: 'opencode-db' },
+      cache_hit_rate: prompt ? cr / prompt : null,
+      recorded_cost: info.cost ?? null,
+      reply: {
+        text: blocos.filter(b => b.type === 'text').map(b => b.text).join('\n'),
+        reasoning: blocos.filter(b => b.type === 'thinking').map(b => b.thinking).join('\n'),
+        tool_calls: blocos.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, arguments: b.input })),
+        stop_reason: info.finish ?? null,
+      },
+      request: { method: null, url: null, body: { model: info.modelID, messages: hist.slice() } },
+      response: { status: erro?.data?.statusCode ?? null, id, finish_reason: info.finish ?? null },
+      ...(erro ? { error: { type: erro.name, message: erro.data?.message ?? erro.name } } : {}),
+    });
+    if (info.agent !== 'compaction') compactacao = null;
+    for (const p of ps) {
+      const st = p.state;
+      if (p.type !== 'tool' || !st?.time?.start || !st.time.end) continue;
+      jornal.push({ tool: p.tool, call_id: p.callID, session: ses.id, ok: st.status === 'completed',
+                    ms: st.time.end - st.time.start, output_chars: String(st.output ?? st.error ?? '').length });
+    }
+    // A failed step with nothing to show is not sent again; one with content is.
+    if (!erro || blocos.length) {
+      if (blocos.length) hist.push(peca(id + ':a', { role: 'assistant', content: blocos }));
+      if (resultados.length) hist.push(peca(id + ':r', { role: 'user', content: resultados }));
+    }
+    // A finished summary replaces everything before it: from here on the model
+    // sees the question that asked for it, the summary, and what came after.
+    if (info.summary && info.time?.completed)
+      hist = [ultimoUser, blocos.length ? { $ref: id + ':a' } : null].filter(Boolean);
+  }
+  return out;
+}
+
+/** The database as the files the plugin would have written: one folder per
+ *  conversation, its subagents' turns filed inside it — as the plugin does —
+ *  and numbered in the order they ran. */
+function opencodeParaArquivos(db, fonte) {
+  const sessoes = new Map(linhas(db, 'SELECT id, parent_id, title, directory, time_created, time_updated FROM session')
+    .map(s => [s.id, s]));
+  const msgs = new Map();
+  for (const r of linhas(db, 'SELECT id, session_id, data FROM message ORDER BY session_id, time_created, id')) {
+    const info = json(r.data); if (!info) continue;
+    if (!msgs.has(r.session_id)) msgs.set(r.session_id, []);
+    msgs.get(r.session_id).push({ id: r.id, info });
+  }
+  const partes = new Map();
+  for (const r of linhas(db, 'SELECT message_id, data FROM part ORDER BY message_id, id')) {
+    const p = json(r.data); if (!p) continue;
+    if (!partes.has(r.message_id)) partes.set(r.message_id, []);
+    partes.get(r.message_id).push(p);
+  }
+  const raizDe = id => {
+    let s = sessoes.get(id);
+    for (let i = 0; s?.parent_id && sessoes.has(s.parent_id) && i < 50; i++) s = sessoes.get(s.parent_id);
+    return s?.id ?? id;
+  };
+  const porRaiz = new Map();
+  for (const [sid, lista] of msgs) {
+    const ses = sessoes.get(sid); if (!ses) continue;
+    const raiz = raizDe(sid);
+    const g = porRaiz.get(raiz) ?? { turnos: [], pecas: new Map(), jornal: [] };
+    g.turnos.push(...turnosDaSessao(ses, lista, partes, g.pecas, raiz, g.jornal));
+    porRaiz.set(raiz, g);
+  }
+  const out = [];
+  for (const [raiz, g] of porRaiz) {
+    if (!g.turnos.length) continue;
+    const ses = sessoes.get(raiz);
+    const dir = fonte + '/' + pastaDe(ses) + '/';
+    const fim = Math.max(ses.time_updated ?? 0, ...g.turnos.map(t => t._t));
+    g.turnos.sort((a, b) => a._t - b._t);
+    g.turnos.forEach((t, i) => {
+      t.turn = i + 1; const mt = t._t; delete t._t;
+      out.push({ path: `${dir}turn_${String(t.turn).padStart(3, '0')}.json`, text: JSON.stringify(t), mtime: mt });
+    });
+    out.push({ path: dir + 'pieces.jsonl', mtime: fim,
+               text: [...g.pecas].map(([h, b]) => JSON.stringify({ h, b })).join('\n') });
+    out.push({ path: dir + 'turns.json', mtime: fim,
+               text: JSON.stringify({ session: raiz, title: ses.title, title_source: 'session', updated_at: iso(fim) }) });
+    if (g.jornal.length) out.push({ path: dir + TOOL_FILE, mtime: fim, text: g.jornal.map(x => JSON.stringify(x)).join('\n') });
+  }
+  return out;
+}
+
+/** Files picked or dropped → the log files `ingest` reads. Each database takes
+ *  the `-wal` of the same name when it came along. */
+async function lerDbs(arquivos) {               // [{name, bytes}]
+  const SQL = await carregarSqlJs();
+  const out = [];
+  for (const a of arquivos.filter(x => !/-wal$/i.test(x.name))) {
+    const wal = arquivos.find(w => w.name === a.name + '-wal');
+    const db = new SQL.Database(aplicarWal(a.bytes, wal?.bytes));
+    try { out.push(...opencodeParaArquivos(db, a.name)); }
+    finally { db.close(); }
+  }
+  return out;
+}
+const bytesDe = async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+const lerDbHandles = async hs => lerDbs(await Promise.all(hs.map(async h => bytesDe(await h.getFile()))));
+
+async function carregarDb(read) {
+  const btn = $('#dbBtn'), antes = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Reading…';
+  try { ingest(await read()); }
+  catch (e) {
+    console.warn('could not read the opencode database:', e);
+    alert('Could not read the opencode database: ' + (e?.message ?? e));
+  } finally { btn.disabled = false; btn.textContent = antes; }
+}
+
+/** Like a picked folder: file handles re-read on ⟳, and remembered for the next
+ *  visit. The WAL has to be picked alongside — a file handle opens no siblings. */
+async function useDbHandles(hs) {
+  folders('readwrite', st => st.put({ handles: hs, name: hs.map(h => h.name).join(' + '), at: Date.now() }, 'db'))
+    .catch(e => console.warn('could not remember the database:', e));
+  S.reload = () => lerDbHandles(hs);
+  await carregarDb(S.reload);
+}
+
+async function pickDb() {
+  if (window.showOpenFilePicker) {
+    let hs = null;
+    try { hs = await window.showOpenFilePicker({ multiple: true, id: 'opencode-db' }); }
+    catch (e) {
+      if (e?.name === 'AbortError') return;
+      console.warn('file picker unavailable:', e);
+    }
+    if (hs?.length) return useDbHandles(hs);
+  }
+  $('#dbInput').click();
+}
+$('#dbBtn').onclick = pickDb;
+$('#dbInput').onchange = async e => {
+  const fs = [...e.target.files].filter(f => ehDb(f.name));
+  e.target.value = '';
+  if (!fs.length) return;
+  S.reload = null;                             // a snapshot, as with the folder <input>
+  await carregarDb(async () => lerDbs(await Promise.all(fs.map(bytesDe))));
+};
+
+async function offerLastDb() {
+  if (!window.showOpenFilePicker || !window.indexedDB) return;
+  let rec = null;
+  try { rec = await folders('readonly', st => st.get('db')); } catch { return; }
+  if (!rec?.handles?.length) return;
+  const btn = $('#reopenDbBtn');
+  btn.textContent = '↻ ' + rec.name;
+  btn.title = 'Reopen the database read last: ' + rec.name;
+  btn.hidden = false;
+  btn.onclick = async () => {
+    try {
+      for (const h of rec.handles)
+        if (await h.requestPermission({ mode: 'read' }) !== 'granted') return;
+      await useDbHandles(rec.handles);
+    } catch (e) {
+      console.warn('could not reopen the database:', e);
+      btn.hidden = true;
+      folders('readwrite', st => st.delete('db')).catch(() => {});
+      alert('That database cannot be read any more. Pick it again.');
+    }
+  };
+}
+offerLastDb();
 
 // Reads the whole tree over http. `no-store` everywhere: a refresh that reads
 // the browser cache would show the same turns as before.
@@ -2919,6 +3279,8 @@ function resumoSessao(s) {
   // the viewer read it until now; here it is the best name a session has — an id
   // says nothing, and "llm-audit / main" says which afternoon this was.
   const cc = s.turns.find(t => t.claude_code?.cwd)?.claude_code ?? null;
+  // A turn rebuilt from opencode's database says where it ran on its own.
+  const cwd = cc?.cwd ?? s.turns.find(t => t.cwd)?.cwd;
   const tit = tituloSessao(s);
   const comReuso = s.turns.filter(t => t.reuse);
   const quando = diaDe(s);
@@ -2931,12 +3293,12 @@ function resumoSessao(s) {
     // A session that opened at 23:50 and ran past midnight still files under the
     // day it began, which is the day the person remembers it as.
     dia: chaveDia(quando),
-    cwd: cc?.cwd ?? null,
+    cwd: cwd ?? null,
     // The name the person gave the conversation, which is what they look for:
     // the id is what the folder is found by, not what it is remembered as.
     titulo: tit.titulo,
     titulo_fonte: tit.fonte,
-    projeto: cc?.cwd ? cc.cwd.split('/').filter(Boolean).pop() : null,
+    projeto: cwd ? cwd.split('/').filter(Boolean).pop() : null,
     branch: cc?.git_branch ?? null,
     models: [...new Set(s.turns.map(t => t.model).filter(Boolean))],
     errors: s.turns.filter(falhou).length,
@@ -3227,7 +3589,8 @@ function renderOverview() {
   const ids = [...new Set(s.turns.map(t => t.session).filter(Boolean))];
   const subs = new Set(s.turns.filter(isSub).map(t => t.session));
   const raiz = ids.filter(x => !subs.has(x));
-  const streamed = s.turns.some(t => t._format === 'stream' || t._format === 'audit2');
+  const streamed = s.turns.some(t => (t._format === 'stream' || t._format === 'audit2') && t.source !== 'opencode-db');
+  const doDb = s.turns.every(t => t.source === 'opencode-db');
   // The name over the screen, and the screen's own name demoted beside it: an id
   // says nothing, and it is one chip below either way.
   const tit = tituloSessao(s);
@@ -3249,8 +3612,8 @@ function renderOverview() {
         // to the same folder, so this is not "started plus the duration".
         return u ? `<span class="chip" title="the end of the most recent turn in this folder">updated ${
           esc(fmtTime(u))}</span>` : ''; })()}
-      <span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log with SSE stream' : 'final-response log'}</span>
-      ${[...new Set(s.turns.map(t => t._api))].map(a => `<span class="chip orange">${esc(apiLabel(a))}</span>`).join('')}
+      ${doDb ? '' : `<span class="chip ${streamed ? 'cyan' : ''}">${streamed ? 'log with SSE stream' : 'final-response log'}</span>`}
+      ${[...new Set(s.turns.map(apiDe))].map(a => `<span class="chip orange"${a === DB_API ? ` title="${esc(DB_TIP)}"` : ''}>${esc(a)}</span>`).join('')}
     </div>`));
   if (tot2.note) wrap.append(el('div', 'notebox', '<b>Note from summary.json:</b> ' + esc(tot2.note)));
 
@@ -3548,7 +3911,7 @@ function renderTurnHead(t) {
     <div class="metarow">
       <span class="chip purple">${esc(t.model)}</span>
       <span class="chip">${esc(t.provider)}</span>
-      <span class="chip cyan">${esc(apiLabel(t._api))}</span>
+      <span class="chip cyan"${t.source === 'opencode-db' ? ` title="${esc(DB_TIP)}"` : ''}>${esc(apiDe(t))}</span>
       ${variantOf(t) ? `<span class="chip" title="reasoning variant asked for on this turn">variant: ${esc(variantOf(t))}</span>` : ''}
       ${t.agent ? `<span class="chip orange">agent: ${esc(t.agent)}</span>` : ''}
       ${isSub(t) ? `<span class="chip purple solid" title="a session of its own on the wire (${esc(t.session ?? '?')}), filed in the folder of whoever spawned it">subagent of ${esc(shortId(parentOf(t)))}</span>` : ''}
@@ -4143,7 +4506,7 @@ function renderRequest(t) {
     stop_reason: res.stop_reason ?? t.reply?.stop_reason, finish_reason: res.finish_reason,
     service_tier: res.service_tier, inference_geo: res.inference_geo }, 'Request / response'));
   const cx = ctxStats(t);
-  add(kv({ api: apiLabel(t._api), agent: t.agent, variant: variantOf(t),
+  add(kv({ api: apiDe(t), agent: t.agent, variant: variantOf(t),
     model: b.model, max_tokens: b.max_tokens ?? b.max_output_tokens, stream: b.stream,
     thinking: b.thinking ? `${b.thinking.type} (budget ${b.thinking.budget_tokens})` : null,
     reasoning: b.reasoning ? `effort ${b.reasoning.effort ?? '—'} · summary ${b.reasoning.summary ?? '—'}` : null,
@@ -4157,6 +4520,7 @@ function renderRequest(t) {
   add(kv({
     source: u.source === 'provider' ? 'provider count (exact)'
           : u.source === 'estimated' ? 'estimated by the plugin: the provider reported nothing'
+          : u.source === 'opencode-db' ? 'opencode’s stored count (the provider’s, as opencode kept it)'
           : null,
     input: u.input, cache_read: u.cache_read, cache_write: u.cache_write,
     prompt: u.prompt, output: u.output, reasoning: u.reasoning, total: u.total,
