@@ -1165,6 +1165,7 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
     ? { sid: S.sid, sel: S.sel, tab: S.tab, scope: S.scope, collapsed: S.collapsed, view: S.view,
         side: $('#side').scrollTop, content: $('#content').scrollTop }
     : null;
+  fecharDb();
   S.sessions = sessions;
   if (prev && sessions.some(s => s.id === prev.sid)) {
     S.sid = prev.sid; S.tab = prev.tab; S.scope = prev.scope; S.collapsed = prev.collapsed;
@@ -1234,8 +1235,7 @@ dz.addEventListener('drop', async e => {
   if (dbs.length) {
     const hs = todos.filter(h => h?.kind === 'file' && ehDb(h.name));
     if (hs.length === dbs.length) return useDbHandles(hs);
-    S.reload = null;
-    return carregarDb(async () => lerDbs(await Promise.all(dbs.map(bytesDe))));
+    return abrirDb(() => Promise.all(dbs.map(bytesDe)), false);
   }
   const handles = todos.filter(h => h?.kind === 'directory');
   // The handle re-reads the folder later; the entry API is the fallback for the
@@ -1315,10 +1315,15 @@ $('#fileInput').onchange = async e => {
    =========================================================================
  *  What opencode keeps of every session, without the plugin: `session`,
  *  `message` — one assistant message per request to the model — and `part`,
- *  the text, reasoning and tool calls inside each message. It is turned here
- *  into the very files the plugin writes (turns, piece store, index, tool
- *  journal) and handed to `ingest`, so every screen reads it the way it reads a
- *  log folder, and ⟳ re-reads the database like it re-reads a folder.
+ *  the text, reasoning and tool calls inside each message.
+ *
+ *  Read in three steps, each only when it is asked for. Opening the database
+ *  brings the days and nothing else: SQLite pulls the numbers out of every
+ *  message's JSON into a temp table of its own, and what reaches the page is one
+ *  row per day. Opening a day brings its sessions, as summary rows. Opening a
+ *  session is the only step that parses messages and parts, and only that
+ *  conversation's — which then become turns exactly as a log folder's do, so the
+ *  session screens read them without knowing where they came from.
  *
  *  What it cannot give is what never reaches the database: the system prompt,
  *  the tool schemas, the headers and the stream. The request body is rebuilt
@@ -1345,7 +1350,9 @@ const ehDb = name => /\.(db|sqlite3?)(-wal)?$/i.test(name);
  *  still in `-wal` and not in the database at all. Only frames up to the last
  *  commit whose salts and running checksum hold are taken — the rest is a
  *  transaction that never finished. The header is then marked rollback-journal,
- *  so sql.js does not go looking for a WAL of its own. */
+ *  so sql.js does not go looking for a WAL of its own. `db` is written in place
+ *  when there is no WAL to apply: it is a fresh read, and a copy of a database
+ *  is exactly what this is trying not to hold twice. */
 function aplicarWal(db, wal) {
   let out = db;
   if (wal?.length >= 32) {
@@ -1383,13 +1390,12 @@ function aplicarWal(db, wal) {
       }
     }
   }
-  if (out === db) out = db.slice();
   if (out.length > 19) out[18] = out[19] = 1;
   return out;
 }
 
-const linhas = (db, sql) => {
-  const r = db.exec(sql)[0];
+const linhas = (db, sql, params) => {
+  const r = db.exec(sql, params)[0];
   return r ? r.values.map(v => Object.fromEntries(r.columns.map((c, i) => [c, v[i]]))) : [];
 };
 const json = s => { try { return JSON.parse(s); } catch { return null; } };
@@ -1401,6 +1407,178 @@ function pastaDe(s) {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-`
     + String(s.id).replace(/^ses_/, '').slice(0, 10);
 }
+
+/* ---------- the two summary steps: SQL only ---------- */
+
+/** The cut-offs the credit table knows. A Copilot turn above one is billed at
+ *  another rate, and which side it fell on is a fact of the turn that a sum of
+ *  turns throws away — so the sums are split at every cut-off, and each part is
+ *  priced on its own side. The total comes out exactly what the turns add up to
+ *  once opened. */
+const CORTES = [...new Set(Object.values(COPILOT_PRICES).map(r => r.limit).filter(Boolean))].sort((a, b) => a - b);
+const PROMPT_SQL = 'p.input + p.cache_read + p.cache_write';
+const GRUPO_SQL = `p.provider, p.model,
+  CASE ${CORTES.map((c, i) => `WHEN ${PROMPT_SQL} > ${c} THEN ${i + 1}`).reverse().join(' ')} ELSE 0 END AS banda,
+  sum(p.input) AS input, sum(p.cache_read) AS cache_read, sum(p.cache_write) AS cache_write,
+  sum(p.output + p.reasoning) AS output, sum(p.reasoning) AS reasoning, sum(p.cost) AS cost`;
+
+/** What a group of turns cost, by the rule `custo` applies to each of them:
+ *  Copilot's credit table where it has the model, opencode's stored figure
+ *  everywhere else. */
+function custoGrupo(g) {
+  if (isCopilot(g)) {
+    const hit = copilotPrice(g.model, g.banda ? CORTES[g.banda - 1] + 1 : 0);
+    if (hit) {
+      const p = hit.p;
+      return (g.input * p.in + g.cache_read * p.cached + g.cache_write * (p.write ?? p.in)
+              + g.output * p.out) * CREDIT_USD / 1e6;
+    }
+  }
+  return g.cost;
+}
+
+/** Token and money sums into `alvo`, from the groups above. */
+function somarGrupos(alvo, gs) {
+  for (const f of ['input', 'cache_read', 'cache_write', 'output', 'reasoning']) alvo[f] = 0;
+  alvo.cost = 0; alvo.models = new Set(); alvo.copilot = false;
+  for (const g of gs) {
+    for (const f of ['input', 'cache_read', 'cache_write', 'output', 'reasoning']) alvo[f] += g[f] ?? 0;
+    alvo.cost += custoGrupo(g) ?? 0;
+    if (g.model) alvo.models.add(g.model);
+    if (isCopilot(g) && copilotPrice(g.model, 0)) alvo.copilot = true;
+  }
+  const prompt = alvo.input + alvo.cache_read + alvo.cache_write;
+  alvo.total = prompt + alvo.output;
+  alvo.cache_hit_rate = prompt ? alvo.cache_read / prompt : null;
+  return alvo;
+}
+
+/** One database file, opened, with three temp tables every step above a
+ *  session reads from: `raiz` says which conversation each session files under
+ *  (a subagent under whoever spawned it, as the plugin files it), `passo` is one
+ *  row per request with its numbers pulled out of the JSON, and `resumo` is one
+ *  row per conversation, with the local day it began on. */
+function abrirBase(SQL, a, wal) {
+  const db = new SQL.Database(aplicarWal(a.bytes, wal?.bytes));
+  try {
+    db.exec(`
+      CREATE TEMP TABLE raiz AS
+        WITH RECURSIVE r(id, root) AS (
+          SELECT id, id FROM session WHERE parent_id IS NULL OR parent_id NOT IN (SELECT id FROM session)
+          UNION ALL SELECT s.id, r.root FROM session s JOIN r ON s.parent_id = r.id)
+        SELECT id, root FROM r;
+      CREATE INDEX temp.raiz_root ON raiz(root);
+      CREATE TEMP TABLE passo AS
+        SELECT r.root, m.session_id AS sid,
+          json_extract(m.data, '$.providerID') AS provider, json_extract(m.data, '$.modelID') AS model,
+          json_extract(m.data, '$.agent') AS agent,
+          coalesce(json_extract(m.data, '$.tokens.input'), 0) AS input,
+          coalesce(json_extract(m.data, '$.tokens.cache.read'), 0) AS cache_read,
+          coalesce(json_extract(m.data, '$.tokens.cache.write'), 0) AS cache_write,
+          coalesce(json_extract(m.data, '$.tokens.output'), 0) AS output,
+          coalesce(json_extract(m.data, '$.tokens.reasoning'), 0) AS reasoning,
+          coalesce(json_extract(m.data, '$.cost'), 0) AS cost,
+          json_extract(m.data, '$.error.name') AS erro,
+          json_extract(m.data, '$.time.created') AS criado,
+          json_extract(m.data, '$.time.completed') AS feito
+        FROM message m JOIN raiz r ON r.id = m.session_id
+        WHERE json_extract(m.data, '$.role') = 'assistant';
+      CREATE INDEX temp.passo_root ON passo(root);
+      -- What the person asked for, counted the way \`pedidos\` folds it once the
+      -- turns are read: a prompt sent again as it was (the retry after an error)
+      -- is the same request, and a message with no words of its own opens none.
+      CREATE TEMP TABLE pedido AS
+        SELECT session_id AS root, count(*) AS n FROM (
+          SELECT session_id, t, lag(t) OVER (PARTITION BY session_id ORDER BY time_created, id) AS antes
+          FROM (SELECT u.id, u.session_id, u.time_created,
+                  (SELECT trim(json_extract(x.data, '$.text')) FROM part x
+                    WHERE x.message_id = u.id AND json_extract(x.data, '$.type') = 'text'
+                      AND NOT coalesce(json_extract(x.data, '$.ignored'), 0)
+                      AND trim(coalesce(json_extract(x.data, '$.text'), '')) <> ''
+                    ORDER BY x.id LIMIT 1) AS t
+                FROM message u
+                WHERE u.session_id IN (SELECT id FROM raiz WHERE id = root)
+                  AND json_extract(u.data, '$.role') = 'user')
+          WHERE t IS NOT NULL)
+        WHERE t IS NOT antes GROUP BY session_id;
+      CREATE TEMP TABLE resumo AS
+        SELECT p.root AS id, s.title, s.directory, s.time_created AS aberta,
+          date(min(p.criado) / 1000, 'unixepoch', 'localtime') AS dia,
+          min(p.criado) AS inicio, max(coalesce(p.feito, p.criado)) AS fim,
+          count(*) AS turns, sum(p.sid <> p.root) AS sub_turns,
+          sum(p.erro IS NOT NULL AND p.erro <> 'MessageAbortedError') AS errors,
+          sum(p.agent = 'compaction') AS compactacoes,
+          sum(coalesce(p.feito - p.criado, 0)) / 1000.0 AS elapsed,
+          coalesce((SELECT n FROM pedido WHERE pedido.root = p.root), 0) AS pedidos
+        FROM passo p JOIN session s ON s.id = p.root
+        GROUP BY p.root;
+      CREATE INDEX temp.resumo_dia ON resumo(dia);`);
+  } catch (e) { db.close(); throw new Error(`${a.name} is not an opencode database (${e.message})`); }
+  return { nome: a.name, db };
+}
+
+/** Step one: one row per day, the databases added together. */
+function diasDasBases(bases) {
+  const map = new Map(), cwds = new Set();
+  for (const { db } of bases) {
+    for (const r of linhas(db, `SELECT dia, count(*) AS n, sum(turns) AS turns, sum(pedidos) AS pedidos,
+        sum(errors) AS errors, sum(sub_turns) AS sub_turns, sum(compactacoes) AS compactacoes,
+        sum(elapsed) AS elapsed, min(inicio) AS inicio FROM resumo GROUP BY dia`)) {
+      const g = map.get(r.dia) ?? { dia: r.dia, n: 0, turns: 0, pedidos: 0, errors: 0, sub_turns: 0,
+                                    compactacoes: 0, elapsed: 0, inicio: r.inicio, grupos: [] };
+      for (const f of ['n', 'turns', 'pedidos', 'errors', 'sub_turns', 'compactacoes', 'elapsed']) g[f] += r[f] ?? 0;
+      g.inicio = Math.min(g.inicio, r.inicio);
+      map.set(r.dia, g);
+    }
+    for (const r of linhas(db, `SELECT r.dia, ${GRUPO_SQL} FROM passo p JOIN resumo r ON r.id = p.root
+        GROUP BY r.dia, p.provider, p.model, banda`)) map.get(r.dia)?.grupos.push(r);
+    for (const r of linhas(db, 'SELECT DISTINCT directory FROM resumo')) if (r.directory) cwds.add(r.directory);
+  }
+  const dias = [...map.values()].sort((a, b) => b.dia.localeCompare(a.dia));
+  for (const g of dias) { somarGrupos(g, g.grupos); g.quando = new Date(g.inicio); g.elapsed ||= null; delete g.grupos; }
+  const tot = somarGrupos({}, []);
+  for (const g of dias) {
+    for (const f of ['n', 'turns', 'pedidos', 'errors', 'sub_turns', 'input', 'cache_read', 'cache_write',
+                     'output', 'reasoning', 'total', 'cost']) tot[f] = (tot[f] ?? 0) + (g[f] ?? 0);
+    tot.elapsed = (tot.elapsed ?? 0) + (g.elapsed ?? 0);
+    g.models.forEach(m => tot.models.add(m));
+    tot.copilot ||= g.copilot;
+  }
+  const prompt = tot.input + tot.cache_read + tot.cache_write;
+  tot.cache_hit_rate = prompt ? tot.cache_read / prompt : null;
+  return { dias, tot, cwds: [...cwds] };
+}
+
+/** Step two: a day's conversations, as summary rows shaped like `resumoSessao`'s
+ *  — which answers with this one until the session is opened. What only the
+ *  turns can say (prefix breaks, retries) stays unknown here, not zero. */
+function sessoesDoDia(dia) {
+  const out = [];
+  for (const base of S.db.bases) {
+    const gs = new Map();
+    for (const g of linhas(base.db, `SELECT p.root, ${GRUPO_SQL} FROM passo p JOIN resumo r ON r.id = p.root
+        WHERE r.dia = ? GROUP BY p.root, p.provider, p.model, banda`, [dia])) {
+      if (!gs.has(g.root)) gs.set(g.root, []);
+      gs.get(g.root).push(g);
+    }
+    for (const r of linhas(base.db, 'SELECT * FROM resumo WHERE dia = ?', [dia])) {
+      const id = pastaDe({ id: r.id, time_created: r.aberta });
+      const res = somarGrupos({
+        id, quando: new Date(r.inicio), ultima: new Date(r.fim), dia: r.dia,
+        cwd: r.directory, titulo: r.title || null, titulo_fonte: 'session',
+        projeto: r.directory ? r.directory.split('/').filter(Boolean).pop() : null, branch: null,
+        errors: r.errors, pedidos: r.pedidos, sub_turns: r.sub_turns, retries: 0,
+        compactacoes: r.compactacoes, prefix_breaks: null, elapsed: r.elapsed || null,
+        turns: r.turns, sem_preco: 0, sem_contagem: 0,
+      }, gs.get(r.id) ?? []);
+      res.models = [...res.models];
+      out.push({ id, summary: null, turns: [], _db: { base, root: r.id, dia }, _resumoDb: res });
+    }
+  }
+  return out;
+}
+
+/* ---------- step three: one conversation, parsed ---------- */
 
 /** A user message as it goes to the model. Text opencode marked `ignored` never
  *  leaves; a compaction part is sent as the question that asks for the summary. */
@@ -1437,9 +1615,10 @@ function blocosAssistente(ps) {
   return { blocos, resultados };
 }
 
-/** One session's requests, in order, each with the history it went out with. */
-function turnosDaSessao(ses, lista, partes, pecas, raiz, jornal) {
-  const peca = (h, b) => { pecas.set(h, b); return { $ref: h }; };
+/** One session's requests, in order, each with the history it went out with.
+ *  The history's messages are shared between the turns, not copied: turn 40
+ *  holds the same objects turn 39 did, plus two. */
+function turnosDaSessao(ses, lista, partes, raiz, jornal) {
   let hist = [], pedido = 0, ultimoUser = null, userInfo = null, compactacao = null;
   const out = [];
   for (const { id, info } of lista) {
@@ -1447,7 +1626,7 @@ function turnosDaSessao(ses, lista, partes, pecas, raiz, jornal) {
     if (info.role === 'user') {
       pedido++; userInfo = info;
       const blocos = blocosUsuario(ps);
-      ultimoUser = blocos.length ? peca(id + ':u', { role: 'user', content: blocos }) : null;
+      ultimoUser = blocos.length ? { role: 'user', content: blocos } : null;
       if (ultimoUser) hist.push(ultimoUser);
       const c = ps.find(p => p.type === 'compaction');
       if (c) compactacao = { auto: c.auto ?? null, overflow: c.overflow ?? null, not_measured: true };
@@ -1500,102 +1679,150 @@ function turnosDaSessao(ses, lista, partes, pecas, raiz, jornal) {
                     ms: st.time.end - st.time.start, output_chars: String(st.output ?? st.error ?? '').length });
     }
     // A failed step with nothing to show is not sent again; one with content is.
-    if (!erro || blocos.length) {
-      if (blocos.length) hist.push(peca(id + ':a', { role: 'assistant', content: blocos }));
-      if (resultados.length) hist.push(peca(id + ':r', { role: 'user', content: resultados }));
-    }
+    const dito = blocos.length ? { role: 'assistant', content: blocos } : null;
+    if (dito) hist.push(dito);
+    if (resultados.length) hist.push({ role: 'user', content: resultados });
     // A finished summary replaces everything before it: from here on the model
     // sees the question that asked for it, the summary, and what came after.
-    if (info.summary && info.time?.completed)
-      hist = [ultimoUser, blocos.length ? { $ref: id + ':a' } : null].filter(Boolean);
+    if (info.summary && info.time?.completed) hist = [ultimoUser, dito].filter(Boolean);
   }
   return out;
 }
 
-/** The database as the files the plugin would have written: one folder per
- *  conversation, its subagents' turns filed inside it — as the plugin does —
- *  and numbered in the order they ran. */
-function opencodeParaArquivos(db, fonte) {
-  const sessoes = new Map(linhas(db, 'SELECT id, parent_id, title, directory, time_created, time_updated FROM session')
-    .map(s => [s.id, s]));
+/** A conversation and every subagent it spawned, as the session a log folder
+ *  would have given: its turns numbered in the order they ran, its tool runs,
+ *  its name. Only this conversation's rows leave SQLite. */
+function carregarSessaoDb(stub) {
+  const { base: { db }, root } = stub._db;
+  const daArvore = 'IN (SELECT id FROM raiz WHERE root = ?)';
+  const sessoes = new Map(linhas(db, `SELECT id, parent_id, title, directory, time_created, time_updated
+    FROM session WHERE id ${daArvore}`, [root]).map(s => [s.id, s]));
   const msgs = new Map();
-  for (const r of linhas(db, 'SELECT id, session_id, data FROM message ORDER BY session_id, time_created, id')) {
+  for (const r of linhas(db, `SELECT id, session_id, data FROM message WHERE session_id ${daArvore}
+      ORDER BY session_id, time_created, id`, [root])) {
     const info = json(r.data); if (!info) continue;
     if (!msgs.has(r.session_id)) msgs.set(r.session_id, []);
     msgs.get(r.session_id).push({ id: r.id, info });
   }
   const partes = new Map();
-  for (const r of linhas(db, 'SELECT message_id, data FROM part ORDER BY message_id, id')) {
+  for (const r of linhas(db, `SELECT message_id, data FROM part WHERE session_id ${daArvore}
+      ORDER BY message_id, id`, [root])) {
     const p = json(r.data); if (!p) continue;
     if (!partes.has(r.message_id)) partes.set(r.message_id, []);
     partes.get(r.message_id).push(p);
   }
-  const raizDe = id => {
-    let s = sessoes.get(id);
-    for (let i = 0; s?.parent_id && sessoes.has(s.parent_id) && i < 50; i++) s = sessoes.get(s.parent_id);
-    return s?.id ?? id;
-  };
-  const porRaiz = new Map();
+  const brutos = [], jornal = [];
   for (const [sid, lista] of msgs) {
-    const ses = sessoes.get(sid); if (!ses) continue;
-    const raiz = raizDe(sid);
-    const g = porRaiz.get(raiz) ?? { turnos: [], pecas: new Map(), jornal: [] };
-    g.turnos.push(...turnosDaSessao(ses, lista, partes, g.pecas, raiz, g.jornal));
-    porRaiz.set(raiz, g);
+    const ses = sessoes.get(sid);
+    if (ses) brutos.push(...turnosDaSessao(ses, lista, partes, root, jornal));
   }
-  const out = [];
-  for (const [raiz, g] of porRaiz) {
-    if (!g.turnos.length) continue;
-    const ses = sessoes.get(raiz);
-    const dir = fonte + '/' + pastaDe(ses) + '/';
-    const fim = Math.max(ses.time_updated ?? 0, ...g.turnos.map(t => t._t));
-    g.turnos.sort((a, b) => a._t - b._t);
-    g.turnos.forEach((t, i) => {
-      t.turn = i + 1; const mt = t._t; delete t._t;
-      out.push({ path: `${dir}turn_${String(t.turn).padStart(3, '0')}.json`, text: JSON.stringify(t), mtime: mt });
-    });
-    out.push({ path: dir + 'pieces.jsonl', mtime: fim,
-               text: [...g.pecas].map(([h, b]) => JSON.stringify({ h, b })).join('\n') });
-    out.push({ path: dir + 'turns.json', mtime: fim,
-               text: JSON.stringify({ session: raiz, title: ses.title, title_source: 'session', updated_at: iso(fim) }) });
-    if (g.jornal.length) out.push({ path: dir + TOOL_FILE, mtime: fim, text: g.jornal.map(x => JSON.stringify(x)).join('\n') });
-  }
-  return out;
+  brutos.sort((a, b) => a._t - b._t);
+  let fim = sessoes.get(root)?.time_updated ?? 0;
+  const turns = brutos.map((raw, i) => {
+    raw.turn = i + 1;
+    const mt = raw._t; delete raw._t; fim = Math.max(fim, mt);
+    const t = normalizeTurn(raw, `turn_${i + 1}.json`, mt);
+    Object.defineProperty(t, '_raw', { value: raw, enumerable: false });
+    return t;
+  });
+  // A new object, not the stub filled in: every memo taken on the stub
+  // (`_pedidos`, `_resumo`) was taken with no turns, and cannot be unset.
+  const s = { id: stub.id, summary: null, turns, tools: jornal, _db: stub._db, _resumoDb: stub._resumoDb,
+              index: { session: root, title: sessoes.get(root)?.title, title_source: 'session', updated_at: iso(fim) } };
+  repairReuse([s]);
+  S.sessions[S.sessions.indexOf(stub)] = s;
+  return s;
 }
 
-/** Files picked or dropped → the log files `ingest` reads. Each database takes
- *  the `-wal` of the same name when it came along. */
-async function lerDbs(arquivos) {               // [{name, bytes}]
+/* ---------- opening, refreshing ---------- */
+
+/** Turns the files picked into open databases and the first step's rows. The
+ *  file bytes go into SQLite once and are not kept here; `reler` is how ⟳ gets
+ *  them again — `null` for a snapshot, which only a new pick can refresh. */
+async function montarDb(arquivos, reler) {
   const SQL = await carregarSqlJs();
-  const out = [];
-  for (const a of arquivos.filter(x => !/-wal$/i.test(x.name))) {
-    const wal = arquivos.find(w => w.name === a.name + '-wal');
-    const db = new SQL.Database(aplicarWal(a.bytes, wal?.bytes));
-    try { out.push(...opencodeParaArquivos(db, a.name)); }
-    finally { db.close(); }
-  }
-  return out;
+  const bases = [];
+  try {
+    for (const a of arquivos.filter(x => !/-wal$/i.test(x.name))) {
+      const wal = arquivos.find(w => w.name === a.name + '-wal');
+      bases.push(abrirBase(SQL, a, wal));
+    }
+  } catch (e) { bases.forEach(b => b.db.close()); throw e; }
+  fecharDb();
+  S.db = { bases, reler, abertos: new Set(), carregados: new Set(), ...diasDasBases(bases) };
+  S.sessions = []; S.reload = null;
 }
-const bytesDe = async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
-const lerDbHandles = async hs => lerDbs(await Promise.all(hs.map(async h => bytesDe(await h.getFile()))));
+const fecharDb = () => { S.db?.bases.forEach(b => b.db.close()); S.db = null; };
 
-async function carregarDb(read) {
+/** Step two, without drawing: the day's sessions join the list. */
+function abrirDia(dia) {
+  S.db.abertos.add(dia);
+  if (S.db.carregados.has(dia)) return;
+  S.db.carregados.add(dia);
+  S.sessions.push(...sessoesDoDia(dia));
+  S.sessions.sort((a, b) => b.id.localeCompare(a.id));
+}
+
+function alternarDia(dia) {
+  if (S.db.abertos.has(dia)) S.db.abertos.delete(dia); else abrirDia(dia);
+  const y = $('#content').scrollTop;
+  renderSessionSelect(); render();
+  $('#content').scrollTop = y;
+}
+
+/** Goes into a session, reading it first when it is still a summary row. */
+function entrarSessao(id) {
+  const s = S.sessions.find(x => x.id === id);
+  if (s && !s.turns.length && s._db) carregarSessaoDb(s);
+  S.sid = id; S.view = 'session'; S.sel = 'overview';
+  S.scope = 'all'; S.collapsed = new Set();
+  renderSessionSelect(); render();
+  $('#content').scrollTop = 0;
+}
+
+async function abrirDb(ler, seguir) {
   const btn = $('#dbBtn'), antes = btn.textContent;
   btn.disabled = true; btn.textContent = 'Reading…';
-  try { ingest(await read()); }
-  catch (e) {
+  try {
+    await montarDb(await ler(), seguir ? ler : null);
+    if (!S.db.dias.length) { fecharDb(); alert('No opencode session found in that database.'); return; }
+    S.sid = null; S.sel = 'overview'; S.view = 'folder'; S.scope = 'all'; S.collapsed = new Set();
+    $('#drop').hidden = true; $('#app').hidden = false;
+    renderSessionSelect(); render();
+  } catch (e) {
     console.warn('could not read the opencode database:', e);
     alert('Could not read the opencode database: ' + (e?.message ?? e));
   } finally { btn.disabled = false; btn.textContent = antes; }
 }
+
+/** ⟳ on a database: read the files again and walk back to where the reading
+ *  was — the same days open, the same sessions read, the same turn and tab. */
+async function refrescarDb() {
+  const abertos = [...S.db.abertos];
+  const lidas = S.sessions.filter(s => s.turns.length).map(s => s.id);
+  const prev = { sid: S.sid, sel: S.sel, tab: S.tab, scope: S.scope, collapsed: S.collapsed, view: S.view,
+                 side: $('#side').scrollTop, content: $('#content').scrollTop };
+  const reler = S.db.reler;
+  await montarDb(await reler(), reler);
+  for (const dia of abertos) if (S.db.dias.some(g => g.dia === dia)) abrirDia(dia);
+  for (const id of lidas) { const s = S.sessions.find(x => x.id === id); if (s) carregarSessaoDb(s); }
+  Object.assign(S, { tab: prev.tab, view: prev.view });
+  if (S.sessions.some(s => s.id === prev.sid)) {
+    S.sid = prev.sid; S.scope = prev.scope; S.collapsed = prev.collapsed;
+    S.sel = prev.sel === 'overview' || turns().some(t => t.turn === prev.sel) ? prev.sel : 'overview';
+  } else { S.sid = null; S.sel = 'overview'; S.view = 'folder'; }
+  renderSessionSelect(); render();
+  $('#side').scrollTop = prev.side; $('#content').scrollTop = prev.content;
+}
+
+const bytesDe = async f => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
 
 /** Like a picked folder: file handles re-read on ⟳, and remembered for the next
  *  visit. The WAL has to be picked alongside — a file handle opens no siblings. */
 async function useDbHandles(hs) {
   folders('readwrite', st => st.put({ handles: hs, name: hs.map(h => h.name).join(' + '), at: Date.now() }, 'db'))
     .catch(e => console.warn('could not remember the database:', e));
-  S.reload = () => lerDbHandles(hs);
-  await carregarDb(S.reload);
+  await abrirDb(() => Promise.all(hs.map(async h => bytesDe(await h.getFile()))), true);
 }
 
 async function pickDb() {
@@ -1614,9 +1841,7 @@ $('#dbBtn').onclick = pickDb;
 $('#dbInput').onchange = async e => {
   const fs = [...e.target.files].filter(f => ehDb(f.name));
   e.target.value = '';
-  if (!fs.length) return;
-  S.reload = null;                             // a snapshot, as with the folder <input>
-  await carregarDb(async () => lerDbs(await Promise.all(fs.map(bytesDe))));
+  if (fs.length) await abrirDb(() => Promise.all(fs.map(bytesDe)), false);   // a snapshot, as with the folder <input>
 };
 
 async function offerLastDb() {
@@ -1715,15 +1940,20 @@ offerLast();
 /** Re-reads the open folder and redraws without losing the reading position. */
 async function refresh() {
   const btn = $('#refreshBtn');
-  if (!S.reload) { pick(); return; }           // snapshot source: the folder has to be picked again
+  // Snapshot source: the folder, or the database, has to be picked again.
+  if (S.db ? !S.db.reler : !S.reload) { S.db ? pickDb() : pick(); return; }
   btn.disabled = true; btn.classList.add('spin');
   try {
-    const files = await S.reload();
-    if (files.length) ingest(files, { keep: true });
+    if (S.db) await refrescarDb();
+    else {
+      const files = await S.reload();
+      if (files.length) ingest(files, { keep: true });
+    }
   } catch (e) {
     console.warn('refresh failed:', e);
     S.reload = null;
-    alert('Could not re-read the folder. Open it again to keep following it.');
+    if (S.db) S.db.reler = null;
+    alert(`Could not re-read the ${S.db ? 'database' : 'folder'}. Open it again to keep following it.`);
   } finally {
     btn.disabled = false; btn.classList.remove('spin');
   }
@@ -2899,15 +3129,15 @@ function sessionTotals(s) {
 
 function renderSessionSelect() {
   const sel = $('#sessionSel');
-  sel.innerHTML = S.sessions.map(s =>
-    `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length} turns</option>`).join('');
-  sel.value = S.sid;
-  sel.onchange = () => {
-    // Picking a session up here is asking to go into it, not to keep looking at
-    // the folder that holds it.
-    S.sid = sel.value; S.view = 'session';
-    S.sel = 'overview'; S.scope = 'all'; S.collapsed = new Set(); render();
-  };
+  // A database lists the sessions of the days opened so far, and none before.
+  sel.innerHTML = (S.sid == null ? `<option value="">${S.sessions.length
+      ? '— pick a session —' : '— open a day in the folder —'}</option>` : '')
+    + S.sessions.map(s =>
+      `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length || s._resumoDb?.turns || 0} turns</option>`).join('');
+  sel.value = S.sid ?? '';
+  // Picking a session up here is asking to go into it, not to keep looking at
+  // the folder that holds it.
+  sel.onchange = () => { if (sel.value) entrarSessao(sel.value); };
 }
 
 function renderSide() {
@@ -3079,10 +3309,13 @@ function render() {
   const c = $('#content'); c.innerHTML = '';
   // The sidebar lists the turns of one conversation. In the folder view there is
   // no such conversation picked yet, and the table wants the width back.
-  $('#main').classList.toggle('solo', S.view === 'folder');
-  $('#side').hidden = S.view === 'folder';
+  // A database opens on its days, with no conversation read yet.
+  const nada = S.view !== 'folder' && !turns().length;
+  $('#main').classList.toggle('solo', S.view === 'folder' || nada);
+  $('#side').hidden = S.view === 'folder' || nada;
   c.append(renderViewTabs());
   if (S.view === 'folder') { c.append(renderFolderOverview()); c.scrollTop = 0; return; }
+  if (nada) return c.append(el('div', 'empty', 'Open a day in the folder, then a session.'));
   renderSide();
   if (S.sel === 'overview') { c.append(renderOverview()); return; }
   const t = turns().find(x => x.turn === S.sel);
@@ -3272,6 +3505,8 @@ const DERIVADO = 'name cut from the first prompt, not one the harness gave';
  *  the data it was taken from. */
 function resumoSessao(s) {
   if (s._resumo) return s._resumo;
+  // A database session not opened yet: the row SQL already summed for it.
+  if (!s.turns.length && s._resumoDb) return s._resumoDb;
   const b = buckets(s.turns, () => '_')?._
     ?? { turns: s.turns.length, input: 0, cache_read: 0, cache_write: 0, output: 0,
          reasoning: 0, total: 0, cost: null, cache_hit_rate: null, sem_preco: 0, sem_contagem: 0 };
@@ -3353,7 +3588,7 @@ function porDia(sessions) {
 function renderViewTabs() {
   const bar = el('div', 'tabs top');
   for (const [id, label, cnt, tip] of [
-    ['folder', 'Folder', S.sessions.length, 'every conversation in the open folder, by day'],
+    ['folder', 'Folder', S.db ? S.db.tot.n : S.sessions.length, 'every conversation in the open folder, by day'],
     ['session', 'Session', turns().length, `the open conversation: ${S.sid ?? '—'}`],
   ]) {
     const b = el('button', 'tab' + (S.view === id ? ' active' : ''),
@@ -3365,13 +3600,12 @@ function renderViewTabs() {
   return bar;
 }
 
-function renderFolderOverview() {
-  const wrap = el('div');
-  const q = S.q.toLowerCase();
-  const casa = r => !q || [r.id, r.cwd, r.branch, ...r.models]
-    .some(v => String(v ?? '').toLowerCase().includes(q));
+/** The folder screen's numbers, from the sessions read: a log folder is read
+ *  whole, so every figure is a sum over its turns. */
+function modeloPasta(casa) {
   const sessoes = S.sessions.filter(s => casa(resumoSessao(s)));
   const dias = porDia(sessoes);
+  for (const g of dias) { g.n = g.sessoes.length; g.aberto = true; }
   const rs = sessoes.map(resumoSessao);
   // The same condition the session overview puts on its own Cost column: with no
   // rate anywhere in the folder the screen shows no money at all, rather than a
@@ -3390,24 +3624,56 @@ function renderFolderOverview() {
   tot.cache_hit_rate = prompt ? tot.cache_read / prompt : null;
   const comQuebras = rs.filter(r => r.prefix_breaks != null);
   tot.prefix_breaks = comQuebras.length ? comQuebras.reduce((a, r) => a + r.prefix_breaks, 0) : null;
-
   const todos = sessoes.flatMap(s => s.turns);
+  return {
+    n: sessoes.length, dias, tot, comCusto, todos,
+    maisCara: comCusto ? rs.reduce((a, r) => (r.cost ?? 0) > (a?.cost ?? -1) ? r : a, null) : null,
+    datas: rs.map(r => r.quando).filter(Boolean).sort((a, b) => a - b),
+    models: [...new Set(rs.flatMap(r => r.models))],
+    cwds: [...new Set(rs.map(r => r.cwd).filter(Boolean))],
+    fonte: fonteCusto(todos),
+  };
+}
+
+/** The same numbers from a database: the days SQL already summed, and the rows
+ *  of the days opened so far. What only a read of every session can say — the
+ *  dearest one, the prefix breaks, the turns past a cut-off — is left off
+ *  rather than answered from the few that were opened. */
+function modeloDb(casa) {
+  const D = S.db;
+  const dias = D.dias.map(g => {
+    const aberto = D.abertos.has(g.dia);
+    return { ...g, aberto, sessoes: !aberto ? [] : S.sessions.filter(s => s._db?.dia === g.dia)
+      .map(s => ({ s, r: resumoSessao(s) })).filter(x => casa(x.r))
+      .sort((a, b) => (b.r.quando ?? 0) - (a.r.quando ?? 0)) };
+  });
+  return {
+    n: D.tot.n, dias, tot: { ...D.tot, retries: 0, prefix_breaks: null }, comCusto: true, todos: [],
+    maisCara: null, datas: D.dias.map(g => g.quando).sort((a, b) => a - b),
+    models: [...D.tot.models], cwds: D.cwds,
+    fonte: [D.tot.copilot ? 'Copilot credits' : null, 'opencode db (stored cost)'].filter(Boolean).join(' + '),
+  };
+}
+
+function renderFolderOverview() {
+  const wrap = el('div');
+  const q = S.q.toLowerCase();
+  const casa = r => !q || [r.id, r.cwd, r.branch, ...r.models]
+    .some(v => String(v ?? '').toLowerCase().includes(q));
+  const { n, dias, tot, comCusto, todos, maisCara, datas, models, cwds, fonte } =
+    S.db ? modeloDb(casa) : modeloPasta(casa);
+
   const semPrecoModelos = [...new Set(todos.filter(semPreco).map(t => t.model))];
   const semPrecoTurnos = todos.filter(semPreco).length;
   const furos = [...new Set(todos.flatMap(furosDe))];
   const furosTurnos = todos.filter(t => furosDe(t).length).length;
   const faixas = [...new Set(todos.map(faixaDe).filter(Boolean).map(faixaLabel))];
   const faixaTurnos = todos.filter(t => faixaDe(t)).length;
-  const maisCara = comCusto
-    ? rs.reduce((a, r) => (r.cost ?? 0) > (a?.cost ?? -1) ? r : a, null) : null;
 
-  const datas = rs.map(r => r.quando).filter(Boolean).sort((a, b) => a - b);
-  const models = [...new Set(rs.flatMap(r => r.models))];
-  const cwds = [...new Set(rs.map(r => r.cwd).filter(Boolean))];
   wrap.append(el('div', 'thead', `<h1>Folder</h1>
     <div class="metarow">
-      <span class="chip accent solid">${nf(sessoes.length)} session(s)</span>${
-        q ? ` <span class="chip yellow">filtered from ${nf(S.sessions.length)}</span>` : ''}
+      <span class="chip accent solid">${nf(n)} session(s)</span>${
+        q && !S.db ? ` <span class="chip yellow">filtered from ${nf(S.sessions.length)}</span>` : ''}
       <span class="chip cyan">${nf(dias.length)} day(s)</span>
       ${datas.length ? `<span class="chip">${esc(rotuloDia(datas[0]))}${
         chaveDia(datas[0]) !== chaveDia(datas[datas.length - 1])
@@ -3415,7 +3681,7 @@ function renderFolderOverview() {
       ${cwds.length ? `<span class="chip green" title="${esc(cwds.join('\n'))}">${
         nf(cwds.length)} project(s)</span>` : ''}
       ${models.map(m => `<span class="chip purple">${esc(m)}</span>`).join('')}
-      ${fonteCusto(todos) ? `<span class="chip orange">${esc(fonteCusto(todos))}</span>` : ''}
+      ${fonte ? `<span class="chip orange">${esc(fonte)}</span>` : ''}
     </div>`));
 
   const K = (v, l, col) => `<div class="kpi"><b${col ? ` style="color:${col}"` : ''}>${v}</b><span>${l}</span></div>`;
@@ -3423,7 +3689,7 @@ function renderFolderOverview() {
     // The money first here, unlike the session screen: on the folder it is the
     // reason the screen exists, not a detail beside the turn list.
     (comCusto ? K(money(tot.cost), 'Total cost', 'var(--green)') : '') +
-    K(nf(sessoes.length), 'Sessions') +
+    K(nf(n), 'Sessions') +
     K(nf(tot.pedidos), 'User requests') +
     K(nf(tot.turns), 'Turns') +
     K(nf(tot.total), 'Total tokens') +
@@ -3481,7 +3747,7 @@ function renderFolderOverview() {
       row.innerHTML = `<span class="d">${esc(rotuloDia(d.quando))}</span>
         <span class="mini"><i style="width:${max ? pctOf(d.cost ?? 0, max).toFixed(2) : 0}%"></i></span>
         <span class="amt">${money(d.cost)}</span>`;
-      row.title = `${d.sessoes.length} session(s) · ${d.pedidos} request(s) · ${
+      row.title = `${d.n} session(s) · ${d.pedidos} request(s) · ${
         nf(d.turns)} turn(s) · ${nf(d.total)} tk`;
       box.append(row);
     }
@@ -3505,8 +3771,14 @@ function renderFolderOverview() {
   const tb = el('tbody');
   for (const g of dias) {
     const band = el('tr', 'dia');
-    band.innerHTML = `<td colspan="${NCOL}"><b class="day">▤ ${esc(rotuloDia(g.quando))}</b> · <b>${
-      g.sessoes.length}</b> session(s) · ${g.pedidos} request(s) · ${g.turns} turn(s) · ${
+    // A database's day is a row to open: its sessions are read on the click.
+    if (S.db) {
+      band.classList.add('clickable');
+      band.title = g.aberto ? 'close the day' : 'open the day: reads its sessions';
+      band.onclick = () => alternarDia(g.dia);
+    }
+    band.innerHTML = `<td colspan="${NCOL}"><b class="day">${S.db ? (g.aberto ? '▾' : '▸') : '▤'} ${
+      esc(rotuloDia(g.quando))}</b> · <b>${g.n}</b> session(s) · ${g.pedidos} request(s) · ${g.turns} turn(s) · ${
       nf(g.total)} tk${
       g.cache_hit_rate != null ? ` · <span style="color:${corCache(g.cache_hit_rate)}">${
         (g.cache_hit_rate * 100).toFixed(1)}% cache</span>` : ''}${
@@ -3559,19 +3831,16 @@ function renderFolderOverview() {
         }${r.sem_preco ? '<span style="color:var(--yellow)"> *</span>' : ''}</td>` : ''}`;
       // The table is the way into a session, which is the reason it is the screen
       // the folder opens on.
-      tr.onclick = () => {
-        S.sid = s.id; S.view = 'session'; S.sel = 'overview';
-        S.scope = 'all'; S.collapsed = new Set();
-        renderSessionSelect(); render();
-      };
+      tr.onclick = () => entrarSessao(s.id);
       tb.append(tr);
     }
   }
   tbl.append(tb);
   const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
-  if (!sessoes.length) { tbl.remove(); card.append(el('div', 'empty', 'No session matches the search.')); }
+  if (!n) { tbl.remove(); card.append(el('div', 'empty', 'No session matches the search.')); }
   wrap.append(el('h3', null, 'Sessions by day'), card);
-  wrap.append(el('div', 'foot', 'A row opens the session. <b>Asks</b> counts the things the person '
+  wrap.append(el('div', 'foot', (S.db ? 'A day opens its sessions, and only then are they read. ' : '')
+    + 'A row opens the session. <b>Asks</b> counts the things the person '
     + 'asked for, not the trips to the model one of them took; <b>Breaks</b> counts the turns that '
     + 're-sent a prefix the turn before had changed — each of those is a cache miss over the whole '
     + 'history behind it.'));
