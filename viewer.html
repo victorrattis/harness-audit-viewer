@@ -1737,7 +1737,29 @@ function promptDoProvedor(M, id, providerID) {
 const AGENTES_NATIVOS = new Set(['build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary']);
 const SO_LEITURA = new Set(['bash', 'glob', 'grep', 'read', 'webfetch', 'websearch']);
 
-function nomesDasTools({ agente, sub, provider, model, chamouTools }) {
+/** `Wildcard.match`, which is how a permission rule names the tools it covers. */
+const casaCuringa = (input, pattern) => {
+  let re = String(pattern).replaceAll('\\', '/').replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*').replace(/\?/g, '.');
+  if (re.endsWith(' .*')) re = re.slice(0, -3) + '( .*)?';
+  return new RegExp('^' + re + '$', 's').test(String(input).replaceAll('\\', '/'));
+};
+
+/** `Permission.disabled`: the last rule naming the tool decides, and only a deny
+ *  over every pattern takes it off the list. The edit tools answer to `edit`. */
+const negada = (tool, regras) => {
+  const perm = ['edit', 'write', 'apply_patch'].includes(tool) ? 'edit' : tool;
+  const r = regras.findLast(x => casaCuringa(perm, x.permission));
+  return r?.pattern === '*' && r.action === 'deny';
+};
+
+/** Every tool name opencode itself defines; any other one the session called
+ *  came from an MCP server or a plugin. */
+const NATIVAS = new Set(['bash', 'glob', 'grep', 'question', 'read', 'skill', 'task', 'todowrite', 'webfetch',
+  'websearch', 'edit', 'write', 'apply_patch', '_noop', 'invalid', 'lsp', 'plan_enter', 'plan_exit', 'execute',
+  'StructuredOutput']);
+
+function nomesDasTools({ agente, sub, provider, model, chamouTools, externas = [], permissao = [] }) {
   // `ToolRegistry.tools`: websearch only on opencode's own providers, and the
   // gpt- models (but gpt-4 and the oss ones) edit with a patch instead.
   const patch = String(model).includes('gpt-') && !String(model).includes('oss') && !String(model).includes('gpt-4');
@@ -1746,19 +1768,33 @@ function nomesDasTools({ agente, sub, provider, model, chamouTools }) {
                ...(provider === 'opencode' || provider === 'opencode-go' ? ['websearch'] : [])];
   if (agente === 'compaction' || agente === 'title' || agente === 'summary') nomes = [];
   else if (agente === 'explore') nomes = nomes.filter(n => SO_LEITURA.has(n));
+  // The MCP and plugin tools the session called were there for every agent
+  // that does not deny all but a named few.
+  else nomes.push(...externas);
   if (agente !== 'build' && agente !== 'plan') nomes = nomes.filter(n => n !== 'question');
   if (sub) nomes = nomes.filter(n => n !== 'task' && n !== 'todowrite');
   if (agente === 'general') nomes = nomes.filter(n => n !== 'todowrite');
+  // The session's own rules come after the agent's — `opencode run` denies
+  // `question`, a subagent's session denies `task` — and are in the database.
+  nomes = nomes.filter(n => !negada(n, permissao));
   // Copilot refuses a replay of tool calls with no tools field at all.
   if (!nomes.length && String(provider).includes('github-copilot') && chamouTools) nomes = ['_noop'];
-  return nomes.sort();
+  return nomes.sort((a, b) => a.localeCompare(b));
 }
 
-/** The tool definitions, with the parts that vary filled in from the turn. */
-function toolsDoTurno(M, nomes, { agente, ano }) {
+/** The tool definitions, with the parts that vary filled in from the turn. A
+ *  tool opencode does not define was seen only in its calls: its name is exact,
+ *  and the arguments it was called with are all there is of its schema. */
+function toolsDoTurno(M, nomes, { agente, ano, vistos }) {
   const porNome = new Map(M.tools.map(t => [t.name, t]));
   return nomes.map(n => {
     const t = porNome.get(n);
+    if (!t) return {
+      name: n,
+      description: naoGravado('this tool’s description — an MCP server’s or a plugin’s; only its calls are stored'),
+      input_schema: { description: naoGravado('its input schema'),
+                      'x-arguments-seen': [...(vistos?.externas.get(n) ?? [])].sort() },
+    };
     let d = t.description;
     if (n === 'bash') d = d.replace('{{os}}', naoGravado('the platform')).replace('{{shell}}', naoGravado('the shell'));
     if (n === 'websearch') d = d.replace('{{year}}', String(ano));
@@ -1772,9 +1808,38 @@ function toolsDoTurno(M, nomes, { agente, ano }) {
   });
 }
 
+const escHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/** `Skill.fmt(list, { verbose: true })`, with the skills this conversation is
+ *  known to have had: the built-in one, and every skill the `skill` tool
+ *  loaded — its name and its folder are in the call. Its description is the
+ *  file's front matter, which the call leaves out. */
+function blocoDeSkills(M, vistos) {
+  const i = M.skills.indexOf('<available_skills>');
+  const cabeca = M.skills.slice(0, i);
+  const nativas = [...M.skills.matchAll(/ {2}<skill>\n {4}<name>([^<]*)<\/name>[\s\S]*?<\/skill>/g)]
+    .map(m => ({ nome: m[1], texto: m[0] }));
+  const lidas = [...(vistos?.skills ?? [])]
+    .filter(([nome]) => !nativas.some(x => x.nome === nome))
+    .map(([nome, dir]) => ({ nome, texto: [
+      '  <skill>',
+      `    <name>${nome}</name>`,
+      `    <description>${naoGravado('this skill’s description — the call that loaded it leaves the front matter out')}</description>`,
+      `    <location>${escHtml(dir.replace(/[\\/]+$/, '') + '/SKILL.md')}</location>`,
+      '  </skill>',
+    ].join('\n') }));
+  return cabeca + [
+    '<available_skills>',
+    ...[...nativas, ...lidas].sort((a, b) => a.nome.localeCompare(b.nome)).map(x => x.texto),
+    `  ${naoGravado('any other skill installed on that machine — only the ones loaded here are known')}`,
+    '</available_skills>',
+  ].join('\n');
+}
+
 /** `LLMRequestPrep.prepare`: one system text — the agent's own prompt or the
  *  model family's, the environment, the instruction files, MCP, the skills. */
-function systemDoTurno(M, { agente, model, provider, cwd, raiz, criado, comSkills }) {
+function systemDoTurno(M, { agente, model, provider, cwd, raiz, criado, comSkills, vistos }) {
   const env = [
     `You are powered by the model named ${model}. The exact model ID is ${provider}/${model}`,
     'Here is some useful information about the environment you are running in:',
@@ -1787,25 +1852,51 @@ function systemDoTurno(M, { agente, model, provider, cwd, raiz, criado, comSkill
     `  Today's date: ${new Date(criado).toDateString()}`,
     '</env>',
   ].join('\n');
+  const mcp = vistos?.externas.size
+    ? naoGravado(`MCP server instructions — ${vistos.externas.size} MCP or plugin tool(s) were called in this conversation; what their servers told the model was not stored`)
+    : naoGravado('MCP server instructions — sent here only if any server gave them');
   return [
     M.agents[agente] ?? promptDoProvedor(M, model, provider),
     env,
     naoGravado('instruction files (AGENTS.md, CLAUDE.md, the config’s instructions) — sent here only if the project had any'),
-    naoGravado('MCP server instructions — sent here only if any server gave them'),
-    ...(comSkills ? [M.skills.replace('</available_skills>',
-      `  ${naoGravado('skills installed on that machine, if any')}\n</available_skills>`)] : []),
+    mcp,
+    ...(comSkills ? [blocoDeSkills(M, vistos)] : []),
   ].join('\n');
+}
+
+/** What the conversation's own calls say it had, beyond what opencode ships:
+ *  the skills the `skill` tool loaded (name → folder) and the tools no part of
+ *  opencode defines (name → the arguments they were called with). Gathered over
+ *  the whole conversation, subagents included — the list is the instance's,
+ *  not a turn's, so a skill loaded late was on offer from the start. */
+function vistosNasPartes(partes) {
+  const skills = new Map(), externas = new Map();
+  for (const ps of partes.values()) for (const p of ps) {
+    if (p.type !== 'tool' || !p.tool) continue;
+    const st = p.state ?? {};
+    if (p.tool === 'skill') {
+      const nome = st.metadata?.name ?? st.input?.name, dir = st.metadata?.dir;
+      if (nome && dir && st.status === 'completed') skills.set(nome, dir);
+    } else if (!NATIVAS.has(p.tool)) {
+      const args = externas.get(p.tool) ?? new Set();
+      for (const k of Object.keys(st.input ?? {})) args.add(k);
+      externas.set(p.tool, args);
+    }
+  }
+  return { skills, externas };
 }
 
 /** A turn's system and tools, shared between the turns that would have sent the
  *  same ones — a session sends the same forty kilobytes of tools every turn,
- *  and holding forty copies of them says nothing more. */
+ *  and holding forty copies of them says nothing more. `vistos` is the same
+ *  for every turn of a read, and the cache lives as long as that read. */
 function moldeDoTurno(cache, q) {
   const M = molde();
-  const chaveTools = [q.agente, q.sub, q.provider, q.model, q.chamouTools, q.ano].join('|');
+  const externas = [...(q.vistos?.externas.keys() ?? [])];
+  const chaveTools = [q.agente, q.sub, q.provider, q.model, q.chamouTools, q.ano, JSON.stringify(q.permissao)].join('|');
   let tools = cache.get(chaveTools);
   if (!tools) {
-    const nomes = nomesDasTools(q);
+    const nomes = nomesDasTools({ ...q, externas });
     tools = toolsDoTurno(M, nomes, q);
     tools._nomes = nomes;
     cache.set(chaveTools, tools);
@@ -1823,7 +1914,8 @@ function moldeDoTurno(cache, q) {
 /** One session's requests, in order, each with the history it went out with.
  *  The history's messages are shared between the turns, not copied: turn 40
  *  holds the same objects turn 39 did, plus two. */
-function turnosDaSessao(ses, lista, partes, raiz, jornal, cacheMolde) {
+function turnosDaSessao(ses, lista, partes, raiz, jornal, cacheMolde, vistos) {
+  const permissao = (ses.permission && json(ses.permission)) || [];
   let hist = [], pedido = 0, ultimoUser = null, userInfo = null, compactacao = null;
   const out = [];
   for (const { id, info } of lista) {
@@ -1856,6 +1948,7 @@ function turnosDaSessao(ses, lista, partes, raiz, jornal, cacheMolde) {
         && hist.some(x => x.role === 'assistant' && x.content.some(b => b.type === 'tool_use')),
       ano: new Date(criado).getFullYear(), criado,
       cwd: info.path?.cwd ?? ses.directory, raiz: info.path?.root ?? null,
+      vistos, permissao,
     });
     out.push({
       source: 'opencode-db',
@@ -1913,7 +2006,7 @@ function turnosDaSessao(ses, lista, partes, raiz, jornal, cacheMolde) {
 function carregarSessaoDb(stub) {
   const { base: { db }, root } = stub._db;
   const daArvore = 'IN (SELECT id FROM raiz WHERE root = ?)';
-  const sessoes = new Map(linhas(db, `SELECT id, parent_id, title, directory, version, time_created, time_updated
+  const sessoes = new Map(linhas(db, `SELECT id, parent_id, title, directory, version, permission, time_created, time_updated
     FROM session WHERE id ${daArvore}`, [root]).map(s => [s.id, s]));
   const msgs = new Map();
   for (const r of linhas(db, `SELECT id, session_id, data FROM message WHERE session_id ${daArvore}
@@ -1929,10 +2022,10 @@ function carregarSessaoDb(stub) {
     if (!partes.has(r.message_id)) partes.set(r.message_id, []);
     partes.get(r.message_id).push(p);
   }
-  const brutos = [], jornal = [], cacheMolde = new Map();
+  const brutos = [], jornal = [], cacheMolde = new Map(), vistos = vistosNasPartes(partes);
   for (const [sid, lista] of msgs) {
     const ses = sessoes.get(sid);
-    if (ses) brutos.push(...turnosDaSessao(ses, lista, partes, root, jornal, cacheMolde));
+    if (ses) brutos.push(...turnosDaSessao(ses, lista, partes, root, jornal, cacheMolde, vistos));
   }
   brutos.sort((a, b) => a._t - b._t);
   let fim = sessoes.get(root)?.time_updated ?? 0;
@@ -5049,7 +5142,10 @@ function renderSystem(t) {
       for this turn: the model <code>${esc(t.provider)}/${esc(t.model)}</code>, the agent <code>${esc(t.agent ?? '?')}</code>${
         isSub(t) ? ' as a subagent' : ''}, the directory and its root, and the day it ran.
       <span style="color:var(--yellow)">⟨not stored in opencode.db⟩</span> marks what opencode reads from the
-      machine instead — the platform, the shell, instruction files, MCP, installed skills.${
+      machine instead — the platform, the shell, instruction files, MCP, installed skills. What the
+      conversation's own calls left behind is filled in: the skills the <code>skill</code> tool loaded (name and
+      location) and the MCP or plugin tools it called (name and the arguments used), plus the session's own
+      permission rules.${
       outra ? `<br><span style="color:var(--yellow)">This session ran on opencode <b>${esc(t.opencode_version)}</b>:
         the text there may differ from ${esc(t.rebuilt_from)}’s.</span>` : ''}${
       AGENTES_NATIVOS.has(t.agent) ? '' : `<br><span style="color:var(--yellow)">The agent <code>${esc(t.agent ?? '?')}</code>
