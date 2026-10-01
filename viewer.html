@@ -411,7 +411,7 @@ const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n
 /* =========================================================================
    GitHub Copilot pricing
    =========================================================================
- *  Credits per 1M tokens, on usage-based billing (as of Sep 24, 2026). It only
+ *  Credits per 1M tokens, on usage-based billing (as of Oct 1, 2026). It only
  *  applies to Copilot turns: for other providers this is the wrong number,
  *  because the price here is Copilot's resale, not the provider's own.
  *
@@ -435,6 +435,7 @@ const COPILOT_PRICES = {
   'claude-sonnet-4':      { in: 300,  cached: 30,   write: 375,  out: 1500 },
   'claude-sonnet-4.6':    { in: 300,  cached: 30,   write: 375,  out: 1500 },
   'claude-sonnet-5':      { in: 200,  cached: 20,   write: 250,  out: 1000 },
+  'claude-sonnet-5.5':    { in: 200,  cached: 20,   write: 250,  out: 1000 },
   'gemini-3.5-flash':     { in: 150,  cached: 15,   write: null, out: 900 },
   // 3.6, 3.7 and 3.8 Flash: promotional price, through Dec 31, 2026.
   'gemini-3.6-flash':     { in: 75,   cached: 7.5,  write: null, out: 375 },
@@ -468,6 +469,9 @@ const COPILOT_PRICES = {
   'gpt-6-sol':            { limit: 272000,
                             low:  { in: 200, cached: 20, write: 250, out: 1000 },
                             high: { in: 400, cached: 40, write: 500, out: 1500 } },
+  'gpt-6.1-sol':          { limit: 272000,
+                            low:  { in: 200, cached: 10, write: 250, out: 1000 },
+                            high: { in: 400, cached: 20, write: 500, out: 1500 } },
   'grok-4.5':             { limit: 200000,
                             low:  { in: 200, cached: 50,  write: null, out: 600 },
                             high: { in: 400, cached: 100, write: null, out: 1200 } },
