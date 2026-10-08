@@ -227,6 +227,37 @@ td.wrap{word-break:break-word;white-space:normal}
 .mini i{display:block;height:100%;background:var(--accent)}
 td.num{font-family:var(--mono);text-align:right;white-space:nowrap;width:1%}
 tr.clickable{cursor:pointer} tr.clickable:hover td{background:var(--panel2)}
+/* Auto refresh button, next to the reload button: each click steps to the next interval. */
+#autoBtn{white-space:nowrap;min-width:128px}
+#autoBtn.on{border-color:var(--green);color:var(--green)}
+.btn.spin{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Delete column: tick box + red cross, left of the time. */
+th.sel,td.sel{width:1%;white-space:nowrap;padding-left:6px;padding-right:2px}
+td.sel{cursor:default}
+td.sel input,th.sel input{vertical-align:middle;margin:0 4px 0 0;cursor:pointer;accent-color:var(--red)}
+td.sel input[disabled],th.sel input[disabled]{cursor:not-allowed;opacity:.4}
+.xdel{background:none;border:1px solid transparent;border-radius:5px;color:var(--red);font-weight:700;
+  font-size:14px;line-height:1;padding:2px 6px;cursor:pointer;vertical-align:middle}
+.xdel:hover:not([disabled]){background:var(--red);color:#fff}
+.xdel[disabled]{opacity:.35;cursor:not-allowed}
+.bulkbar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:12px;margin:8px 0;
+  padding:8px 12px;background:var(--panel2);border:1px solid var(--red);border-radius:8px}
+.bulkbar b{color:var(--red)}
+.btn.danger{background:var(--red);border-color:var(--red);color:#fff}
+.btn.danger:hover:not([disabled]){filter:brightness(1.1);color:#fff}
+.modal-back{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.55)}
+.modal{width:min(560px,92vw);max-height:84vh;display:flex;flex-direction:column;gap:10px;padding:18px 20px;
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+.modal h2{margin:0;font-size:16px;color:var(--red)}
+.modal .list{overflow:auto;max-height:34vh;border:1px solid var(--border);border-radius:6px;padding:6px 10px;
+  background:var(--panel2);font-size:13px}
+.modal .list div{padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modal .list small{color:var(--faint);font-family:var(--mono);margin-left:6px}
+.modal .warn{font-size:12.5px;color:var(--yellow)}
+.modal .err{font-size:12.5px;color:var(--red);min-height:1em}
+.modal .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
 .card.tablecard{overflow-x:auto}
 /* The tab bar that picks the altitude — the folder or the session — sits at the
    very top of the content, where the 18px above it are already the padding. */
@@ -308,6 +339,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
     <input id="search" type="search" placeholder="Search inside the turns…" style="width:280px">
     <div class="grow"></div>
     <button class="btn" id="refreshBtn" title="Reload the logs from disk (r)">⟳</button>
+    <button class="btn" id="autoBtn" title="Click to change how often the open folder is re-read">Auto refresh: off</button>
     <button class="btn" id="themeBtn" title="Toggle theme">◐</button>
     <button class="btn" id="loadBtn">Open folder…</button>
   </header>
@@ -357,6 +389,11 @@ const S = { sessions: [], sid: null, sel: 'overview', tab: 'conv', q: '', groupD
             // `null` means the source is a snapshot (a picked folder) and only a
             // new pick brings the new turns in.
             reload: null,
+            // The directory handles `reload` reads from, when there are any: the only
+            // source a session folder can be deleted through (a picker or a drop).
+            roots: null,
+            // Sessions ticked in the folder table, for the bulk delete.
+            picked: new Set(),
             // Scope of the sidebar list: 'all', 'root' (the main conversation only) or the
             // id of a subagent; `collapsed` holds the folded groups.
             scope: 'all', collapsed: new Set(),
@@ -1122,7 +1159,39 @@ function hydrate(value, store) {
   return out;
 }
 
+/** Auto refresh: off, or one of the intervals the header button steps through —
+ *  chosen by clicking and remembered. `sig` is what the last load looked like, so
+ *  a tick that finds the same files redraws nothing: no flicker, no lost
+ *  selection while idle. */
+const AUTO_OPTIONS = [[0, 'off'], [1000, '1 s'], [5000, '5 s'], [30000, '30 s'], [60000, '1 min']];
+const AUTO_KEY = 'auditViewer.autoRefreshMs';
+const autoPref = () => {
+  try { const v = Number(localStorage.getItem(AUTO_KEY)); return AUTO_OPTIONS.some(o => o[0] === v) ? v : 0; }
+  catch { return 0; }
+};
+const AUTO = { ms: autoPref(), busy: false, sig: null, stat: null, last: null, timer: null };
+const signature = files =>
+  files.map(f => `${f.path}|${f.mtime ?? ''}|${f.text.length}`).sort().join('\n');
+
+/** The button: it names the current interval, and is disabled when the source
+ *  cannot be re-read at all — a snapshot (`<input>` pick). */
+function paintAuto() {
+  const b = $('#autoBtn');
+  const live = !!S.reload;
+  const label = AUTO_OPTIONS.find(o => o[0] === AUTO.ms)?.[1] ?? 'off';
+  const next = AUTO_OPTIONS[(AUTO_OPTIONS.findIndex(o => o[0] === AUTO.ms) + 1) % AUTO_OPTIONS.length][1];
+  b.textContent = `Auto refresh: ${label}`;
+  b.classList.toggle('on', live && AUTO.ms > 0);
+  b.disabled = !live;
+  b.title = !live
+    ? 'Auto refresh is unavailable: this source is a snapshot and cannot be re-read. Use "Open folder…" in Chrome/Edge, or serve the folder over http.'
+    : `Click to switch to ${next}. Steps: off → 1 s → 5 s → 30 s → 1 min → off.`
+      + (AUTO.ms && AUTO.last ? `\nLast read ${new Date(AUTO.last).toLocaleTimeString()}` : '');
+}
+
 function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
+  AUTO.sig = signature(files); AUTO.last = Date.now();
+  if (!opts.keep) AUTO.stat = null;
   const map = new Map();
   const stores = new Map();                    // session -> Map(hash, piece)
   const crus = [];                             // turns, hydrated on the 2nd pass
@@ -1207,6 +1276,7 @@ function ingest(files, opts = {}) {            // files: [{path, text, mtime}]
   $('#drop').hidden = true; $('#app').hidden = false;
   renderSessionSelect(); render();
   if (prev) { $('#side').scrollTop = prev.side; $('#content').scrollTop = prev.content; }
+  paintAuto();                                 // the source may just have become re-readable
   return true;
 }
 
@@ -1235,14 +1305,16 @@ async function readEntry(entry, out, base) {
  *  A handle is not a copy of the files: it stays readable for as long as the page
  *  lives, so every refresh re-reads the folder — turns written since included —
  *  without picking anything or confirming an upload again. */
-async function walkHandle(dir, base = '', depth = 1, out = []) {
+async function walkHandle(dir, base = '', depth = 1, out = [], meta = false) {
   if (depth > 5) return out;                   // base/<run>/<session>/, with room to spare
   for await (const h of dir.values()) {
     if (h.name.startsWith('.') || h.name === 'node_modules') continue;
-    if (h.kind === 'directory') { await walkHandle(h, base + h.name + '/', depth + 1, out); continue; }
+    if (h.kind === 'directory') { await walkHandle(h, base + h.name + '/', depth + 1, out, meta); continue; }
     if (!queremos(h.name)) continue;
     const f = await h.getFile();
-    out.push({ path: base + h.name, text: await f.text(), mtime: f.lastModified });
+    // `meta` is the cheap pass: size and modified time, no file is read.
+    out.push(meta ? { path: base + h.name, mtime: f.lastModified, size: f.size }
+                  : { path: base + h.name, text: await f.text(), mtime: f.lastModified });
   }
   return out;
 }
@@ -1271,6 +1343,7 @@ dz.addEventListener('drop', async e => {
     ? async () => { const out = []; for (const h of handles) await walkHandle(h, h.name + '/', 1, out); return out; }
     : async () => { const out = []; for (const en of entries) await readEntry(en, out, ''); return out; };
   S.reload = read;
+  S.roots = handles.length ? handles : null;   // the entry-API fallback cannot delete
   // Two folders at once cannot be reopened as one, and half the logs back is
   // worse than none: only a lone folder is remembered.
   if (handles.length === 1) remember(handles[0]);
@@ -1310,6 +1383,7 @@ const remember = dir => lastPut(dir).catch(e => console.warn('could not remember
 async function useHandle(dir) {
   remember(dir);
   S.reload = () => walkHandle(dir, dir.name + '/');
+  S.roots = [dir];
   ingest(await S.reload());
 }
 
@@ -1334,6 +1408,7 @@ $('#fileInput').onchange = async e => {
   const out = [];
   for (const f of e.target.files) if (queremos(f.name)) out.push({ path: f.webkitRelativePath || f.name, text: await f.text(), mtime: f.lastModified });
   S.reload = null;                             // <input> hands over a snapshot; refresh has to ask again
+  S.roots = null;                              // …and nothing in it can be deleted
   ingest(out);
 };
 
@@ -2066,7 +2141,7 @@ async function montarDb(arquivos, reler) {
   fecharDb();
   // `linhas`: each day opened, and its rows — one per session that ran on it.
   S.db = { bases, reler, abertos: new Set(), linhas: new Map(), ...diasDasBases(bases) };
-  S.sessions = []; S.reload = null;
+  S.sessions = []; S.reload = null; S.roots = null;
 }
 const fecharDb = () => { S.db?.bases.forEach(b => b.db.close()); S.db = null; };
 
@@ -2183,6 +2258,164 @@ async function offerLastDb() {
 }
 offerLastDb();
 
+/* =========================================================================
+   Deleting sessions
+   =========================================================================
+ *  A session is a folder on disk, so deleting one removes that folder. The
+ *  viewer opens folders read-only; write access is asked for only here, at the
+ *  moment someone confirms a delete, and only through a handle (picker or drop):
+ *  an <input> pick or an http page has nothing to delete with.
+ *
+ *  The viewer keeps the files' text, not where they came from, so the folders are
+ *  found again by walking the open handles. A folder is touched only if it looks
+ *  like a session (turn files, summary or state) — a stray directory that happens
+ *  to share the name is left alone. */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function findSessionDirs(roots, ids) {
+  const want = new Set(ids), out = [];
+  const isSession = async dir => {
+    for await (const h of dir.values())
+      if (h.kind === 'file' && (/^turn_.*\.json$/.test(h.name) || h.name === 'summary.json' || h.name === 'state.json'))
+        return true;
+    return false;
+  };
+  async function walk(root, dir, base, depth) {
+    if (depth > 5) return;                     // same reach as walkHandle
+    for await (const h of dir.values()) {
+      if (h.kind !== 'directory' || h.name.startsWith('.') || h.name === 'node_modules') continue;
+      if (want.has(h.name) && await isSession(h)) out.push({ id: h.name, name: h.name, parent: dir, root, path: base + h.name });
+      else await walk(root, h, base + h.name + '/', depth + 1);
+    }
+  }
+  for (const r of roots) await walk(r, r, r.name + '/', 1);
+  return out;
+}
+
+/** Read-write access for the roots involved. Has to run inside the click that
+ *  confirms the delete: that is the only place Chrome lets a page ask. */
+async function ensureWrite(roots) {
+  const o = { mode: 'readwrite' };
+  for (const r of roots)
+    if (await r.queryPermission?.(o) !== 'granted' && await r.requestPermission?.(o) !== 'granted') return false;
+  return true;
+}
+
+/** The confirmation popup. Resolves true only after write access was granted. */
+function confirmDelete(target, missing, dirs) {
+  return new Promise(resolve => {
+    const back = el('div', 'modal-back'), box = el('div', 'modal');
+    const n = target.length;
+    const turns = target.reduce((a, s) => a + s.turns.length, 0);
+    box.append(
+      el('h2', null, `Delete ${n} session${n > 1 ? 's' : ''} permanently?`),
+      el('div', null, `This removes the session folder${n > 1 ? 's' : ''} and every file in ${n > 1 ? 'them' : 'it'} `
+        + `(${turns} turn${turns === 1 ? '' : 's'}, summary, pieces) from disk. <b>It cannot be undone.</b>`));
+    const list = el('div', 'list');
+    for (const s of target) {
+      const row = el('div'), r = resumoSessao(s);
+      row.textContent = r.titulo ?? semData(s.id);
+      const id = el('small'); id.textContent = s.id; row.append(id);
+      row.title = dirs.filter(d => d.id === s.id).map(d => d.path).join('\n');
+      list.append(row);
+    }
+    box.append(list);
+    if (missing.length) {
+      const m = el('div', 'warn');
+      m.textContent = `Skipped: no folder found for ${missing.map(s => resumoSessao(s).titulo ?? semData(s.id)).join(', ')}. `
+        + 'If you opened a session folder itself, delete that one with your file manager.';
+      box.append(m);
+    }
+    box.append(el('div', 'warn', 'If a session is still running in opencode, it stops being recorded '
+      + 'until opencode is restarted.'));
+    const err = el('div', 'err');
+    const cancel = el('button', 'btn', 'Cancel');
+    const del = el('button', 'btn danger', `Delete ${n} permanently`);
+    const actions = el('div', 'actions');
+    actions.append(cancel, del);
+    box.append(err, actions);
+    back.append(box);
+
+    const close = ok => { back.remove(); resolve(ok); };
+    cancel.onclick = () => close(false);
+    back.onclick = e => { if (e.target === back) close(false); };
+    // Keys stop here: the page's shortcuts (r, f, a…) must not act behind the popup.
+    back.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') close(false); });
+    del.onclick = async () => {
+      del.disabled = cancel.disabled = true; err.textContent = '';
+      let ok = false;
+      try { ok = await ensureWrite([...new Set(dirs.map(d => d.root))]); }
+      catch (e) { err.textContent = `Could not ask for write access: ${e?.message ?? e}`; }
+      if (!ok) {
+        err.textContent ||= 'Write access was not granted, so nothing was deleted.';
+        del.disabled = cancel.disabled = false;
+        return;
+      }
+      close(true);
+    };
+    document.body.append(back);
+    cancel.focus();                            // the safe button has the focus, not Delete
+  });
+}
+
+let deleting = false;
+async function requestDelete(list) {
+  if (deleting || !list.length) return;
+  if (!S.roots?.length) { alert('Deleting needs the folder opened with "Open folder…" (Chrome/Edge).'); return; }
+  deleting = true;
+  try {
+    let dirs;
+    try { dirs = await findSessionDirs(S.roots, list.map(s => s.id)); }
+    catch (e) { alert(`Could not look up the folders: ${e?.message ?? e}`); return; }
+    const found = new Set(dirs.map(d => d.id));
+    const target = list.filter(s => found.has(s.id));
+    const missing = list.filter(s => !found.has(s.id));
+    if (!target.length) {
+      alert('No matching session folder was found under the opened folder, so nothing can be deleted from here.'
+        + '\nIf you opened a session folder itself, delete it with your file manager.');
+      return;
+    }
+    if (!await confirmDelete(target, missing, dirs)) return;
+
+    // No auto-refresh read may be in flight while the files go: it would put the
+    // session back on screen a moment after it was deleted.
+    while (AUTO.busy) await sleep(50);
+    AUTO.busy = true;
+    const failed = [];
+    try {
+      for (const d of dirs) {
+        try { await d.parent.removeEntry(d.name, { recursive: true }); }
+        catch (e) { failed.push({ d, e }); }
+      }
+    } finally { AUTO.busy = false; }
+
+    const stuck = new Set(failed.map(f => f.d.id));
+    dropSessions(new Set(target.map(s => s.id).filter(id => !stuck.has(id))));
+    if (failed.length) {
+      alert(`Could not delete ${stuck.size} session(s): ${[...stuck].join(', ')}\n${failed[0].e?.message ?? failed[0].e}`);
+      if (S.reload) { try { ingest(await S.reload(), { keep: true, quiet: true }); } catch { /* the alert said it */ } }
+    }
+  } finally { deleting = false; }
+}
+
+/** Takes deleted sessions off the screen without waiting for the next read. */
+function dropSessions(ids) {
+  if (!ids.size) return;
+  S.sessions = S.sessions.filter(s => !ids.has(s.id));
+  for (const id of ids) S.picked.delete(id);
+  if (!S.sessions.length) {
+    $('#app').hidden = true; $('#drop').hidden = false;
+    S.sid = null;
+    alert('Every session in that folder was deleted — it is empty now. Pick another folder.');
+    return;
+  }
+  if (!S.sessions.some(s => s.id === S.sid)) {
+    S.sid = S.sessions[0].id; S.sel = 'overview';
+    S.view = S.sessions.length > 1 ? 'folder' : 'session';
+  }
+  renderSessionSelect(); render();
+}
+
 // Reads the whole tree over http. `no-store` everywhere: a refresh that reads
 // the browser cache would show the same turns as before.
 async function collectHttp() {
@@ -2222,6 +2455,17 @@ async function offerLast() {
   let state = 'prompt';
   try { state = await rec.handle.queryPermission({ mode: 'read' }); } catch (e) { return; }
   if (state === 'denied') { lastDel().catch(() => {}); return; }
+  // Chrome with "Allow on every visit" reports the permission as still held: the
+  // folder then loads by itself, with no click. Over http the page loads its own
+  // folder instead, so there is nothing to reopen.
+  if (state === 'granted' && !location.protocol.startsWith('http')) {
+    try { await useHandle(rec.handle); return; }
+    catch (e) {                                // moved, renamed, gone: fall back to the button
+      console.warn('could not reopen the folder:', e);
+      lastDel().catch(() => {});
+      return;
+    }
+  }
   const btn = $('#reopenBtn');
   btn.textContent = '↻ ' + rec.name;
   btn.title = 'Reopen the folder read last: ' + rec.name;   // the label may be cut short
@@ -2249,7 +2493,7 @@ offerLast();
   let files = null;
   try { files = await collectHttp(); }
   catch (e) { console.warn('auto-load unavailable:', e); return; }
-  if (files.length) { S.reload = collectHttp; ingest(files); }
+  if (files.length) { S.reload = collectHttp; S.roots = null; ingest(files); }
 })();
 
 /** Re-reads the open folder and redraws without losing the reading position. */
@@ -2271,9 +2515,63 @@ async function refresh() {
     alert(`Could not re-read the ${S.db ? 'database' : 'folder'}. Open it again to keep following it.`);
   } finally {
     btn.disabled = false; btn.classList.remove('spin');
+    paintAuto();
   }
 }
 $('#refreshBtn').onclick = refresh;
+
+/** What the open handles look like on disk, without reading a file: path, size and
+ *  modified time of each. Equal to the last one means nothing was written. */
+async function statSig(roots) {
+  const out = [];
+  for (const r of roots) await walkHandle(r, r.name + '/', 1, out, true);
+  return out.map(f => `${f.path}|${f.mtime}|${f.size}`).sort().join('\n');
+}
+
+/** One auto-refresh pass. Never opens a picker or an alert: a source that can no
+ *  longer be read switches the auto refresh off quietly, and ⟳ explains the rest. */
+async function autoTick() {
+  if (!AUTO.ms || AUTO.busy || document.hidden || !S.reload) return;
+  AUTO.busy = true;                            // a slow read must not pile ticks up
+  try {
+    // At 1 s a full read of a big folder would be what slows the machine down, so a
+    // folder opened through a handle is checked by size and time first and read
+    // only when something changed. Taken before the read: a write that lands during
+    // it shows up as a difference on the next tick instead of being missed.
+    const stat = S.roots?.length ? await statSig(S.roots) : null;
+    AUTO.last = Date.now();
+    if (stat !== null && stat === AUTO.stat) { paintAuto(); return; }
+    const files = await S.reload();
+    if (files.length && signature(files) !== AUTO.sig) ingest(files, { keep: true });
+    AUTO.stat = stat;
+    paintAuto();
+  } catch (e) {
+    console.warn('auto refresh stopped:', e);
+    S.reload = null;
+    paintAuto();
+  } finally {
+    AUTO.busy = false;
+  }
+}
+function setAutoMs(ms) {
+  AUTO.ms = ms;
+  try { localStorage.setItem(AUTO_KEY, String(ms)); } catch { /* private mode: not remembered */ }
+  clearInterval(AUTO.timer);
+  AUTO.timer = ms ? setInterval(autoTick, ms) : null;
+  paintAuto();
+  if (ms) autoTick();                          // catch up now, not one interval from now
+}
+// One click, next interval; after the last one it wraps back to off.
+$('#autoBtn').onclick = () => {
+  if (!S.reload) return;                       // snapshot source: nothing to re-read
+  const i = AUTO_OPTIONS.findIndex(o => o[0] === AUTO.ms);
+  setAutoMs(AUTO_OPTIONS[(i + 1) % AUTO_OPTIONS.length][0]);
+};
+if (AUTO.ms) AUTO.timer = setInterval(autoTick, AUTO.ms);
+// A background tab is skipped by the tick; catch up the moment it is looked at.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) autoTick(); });
+paintAuto();
+
 
 /* =========================================================================
    Turn-reading helpers
@@ -3448,7 +3746,7 @@ function renderSessionSelect() {
   sel.innerHTML = (S.sid == null ? `<option value="">${S.sessions.length
       ? '— pick a session —' : '— open a day in the folder —'}</option>` : '')
     + S.sessions.map(s =>
-      `<option value="${esc(s.id)}">${esc(s.id)} · ${s.turns.length || s._turnsDb || 0} turns</option>`).join('');
+      `<option value="${esc(s.id)}" title="${esc(s.id)}">${esc(tituloSessao(s).titulo ?? s.id)} · ${s.turns.length || s._turnsDb || 0} turns</option>`).join('');
   sel.value = S.sid ?? '';
   // Picking a session up here is asking to go into it, not to keep looking at
   // the folder that holds it.
@@ -3992,6 +4290,10 @@ function renderFolderOverview() {
   wrap.append(el('div', 'thead', `<h1>Folder</h1>
     <div class="metarow">
       <span class="chip accent solid">${nf(n)} session(s)</span>${
+        // One session: its name belongs in the header, not only in the table below.
+        n === 1 && dias[0]?.sessoes[0]?.r.titulo
+          ? ` <span class="chip cyan" title="session id: ${esc(dias[0].sessoes[0].r.id)}">Session name: ${
+              esc(dias[0].sessoes[0].r.titulo)}</span>` : ''}${
         q && !S.db ? ` <span class="chip yellow">filtered from ${nf(S.sessions.length)}</span>` : ''}
       <span class="chip cyan">${nf(dias.length)} day(s)</span>
       ${datas.length ? `<span class="chip">${esc(rotuloDia(datas[0]))}${
@@ -4082,14 +4384,49 @@ function renderFolderOverview() {
   // otherwise every row would repeat the chip already in the header above, and
   // it is exactly the width the Cost column needs to stay on screen.
   const comModelo = models.length > 1;
-  const NCOL = 13 + (comCusto ? 1 : 0) + (comModelo ? 1 : 0);
+  // Delete column. Only a folder opened through a picker or a drop has handles that
+  // can remove anything; every other source gets the controls, disabled. A database
+  // has no session folders at all, so it gets none.
+  const comSel = !S.db;
+  const canDelete = comSel && !!S.roots?.length;
+  const noDelete = 'Deleting needs the folder opened with "Open folder…" (Chrome/Edge): this source is read-only.';
+  const NCOL = 13 + (comCusto ? 1 : 0) + (comModelo ? 1 : 0) + (comSel ? 1 : 0);
+  // What is ticked is exactly what is on screen: a filter that hides a ticked
+  // row drops it from the selection, so a bulk delete never reaches an unseen one.
+  const mostradas = comSel ? dias.flatMap(g => g.sessoes.map(x => x.s)) : [];
+  const visible = new Set(mostradas.map(s => s.id));
+  S.picked = new Set([...S.picked].filter(id => visible.has(id)));
+  const boxes = new Map();
   const tbl = el('table');
-  tbl.innerHTML = `<thead><tr><th>Time</th><th>Last</th><th>Session</th>${comModelo ? '<th>Model</th>' : ''}
+  tbl.innerHTML = `<thead><tr>${comSel ? '<th class="sel"></th>' : ''}<th>Time</th><th>Last</th><th>Session name</th>${comModelo ? '<th>Model</th>' : ''}
     <th class="num">Turns</th><th class="num">Asks</th>
     <th class="num">Input</th><th class="num">C.read</th><th class="num">C.write</th>
     <th class="num">Output</th><th class="num">Total</th><th class="num">Cache</th>
     <th class="num">Breaks</th><th class="num">Dur</th>${
       comCusto ? '<th class="num">Cost</th>' : ''}</tr></thead>`;
+  // Bulk bar: appears with the first tick, stays in view while the list scrolls.
+  const bar = el('div', 'bulkbar'); bar.hidden = true;
+  const count = el('b');
+  const bulkDel = el('button', 'btn danger', 'Delete selected…');
+  const clear = el('button', 'btn', 'Clear selection');
+  bar.append(count, bulkDel, clear);
+  const selAll = el('input'); selAll.type = 'checkbox'; selAll.disabled = !canDelete || !mostradas.length;
+  selAll.title = canDelete ? 'Select every session shown' : noDelete;
+  const updateBar = () => {
+    const n = mostradas.filter(s => S.picked.has(s.id)).length;
+    bar.hidden = n === 0;
+    count.textContent = `${n} selected`;
+    selAll.checked = n > 0 && n === mostradas.length;
+    selAll.indeterminate = n > 0 && n < mostradas.length;
+    for (const [id, cb] of boxes) cb.checked = S.picked.has(id);
+  };
+  selAll.onchange = () => {
+    for (const s of mostradas) selAll.checked ? S.picked.add(s.id) : S.picked.delete(s.id);
+    updateBar();
+  };
+  bulkDel.onclick = () => requestDelete(mostradas.filter(s => S.picked.has(s.id)));
+  clear.onclick = () => { S.picked.clear(); updateBar(); };
+  tbl.querySelector('th.sel')?.append(selAll);
   const tb = el('tbody');
   for (const g of dias) {
     const band = el('tr', 'dia');
@@ -4161,13 +4498,30 @@ function renderFolderOverview() {
       // The table is the way into a session, which is the reason it is the screen
       // the folder opens on.
       tr.onclick = () => entrarSessao(s.id);
+      if (comSel) {
+        // First cell: tick box and the red cross. Stops the click here so that
+        // neither opens the session behind them.
+        const sel = el('td', 'sel');
+        const cb = el('input'); cb.type = 'checkbox'; cb.disabled = !canDelete;
+        cb.title = canDelete ? 'Select this session' : noDelete;
+        cb.onchange = () => { cb.checked ? S.picked.add(s.id) : S.picked.delete(s.id); updateBar(); };
+        boxes.set(s.id, cb);
+        const x = el('button', 'xdel', '✕'); x.disabled = !canDelete;
+        x.title = canDelete ? 'Delete this session from disk…' : noDelete;
+        x.setAttribute('aria-label', 'Delete session');
+        x.onclick = () => requestDelete([s]);
+        sel.onclick = e => e.stopPropagation();
+        sel.append(cb, x);
+        tr.prepend(sel);
+      }
       tb.append(tr);
     }
   }
   tbl.append(tb);
   const card = el('div', 'card tablecard'); card.style.padding = '4px 8px'; card.append(tbl);
   if (!n) { tbl.remove(); card.append(el('div', 'empty', 'No session matches the search.')); }
-  wrap.append(el('h3', null, 'Sessions by day'), card);
+  wrap.append(el('h3', null, 'Sessions by day'), bar, card);
+  updateBar();
   wrap.append(el('div', 'foot', (S.db ? 'A day opens its sessions, and only then are they read. ' : '')
     + 'A row opens the session. <b>Asks</b> counts the things the person '
     + 'asked for, not the trips to the model one of them took; <b>Breaks</b> counts the turns that '
