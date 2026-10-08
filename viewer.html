@@ -448,7 +448,7 @@ const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n
 /* =========================================================================
    GitHub Copilot pricing
    =========================================================================
- *  Credits per 1M tokens, on usage-based billing (as of Oct 1, 2026). It only
+ *  Credits per 1M tokens, on usage-based billing (as of Oct 8, 2026, from GitHub's models-and-pricing page). It only
  *  applies to Copilot turns: for other providers this is the wrong number,
  *  because the price here is Copilot's resale, not the provider's own.
  *
@@ -457,12 +457,19 @@ const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n
  *  `limit` is the context cut-off — above it the rate is `high`, and what
  *  decides is the turn's prompt size, which is what the provider measures.
  *
+ *  Rows the page no longer lists — claude-opus-4.7, gemini-3.5-flash,
+ *  gemini-3.6-flash and kimi-k2.7-code — are kept at their last published price,
+ *  so logs recorded while they were offered still add up.
+ *
  *  A model missing from here stays out of the total, and the screen says which
  *  ones: an incomplete total presenting itself as complete beats no total. */
 const COPILOT_PRICES = {
   'claude-fable-5':       { in: 1000, cached: 100,  write: 1250, out: 5000 },
   'claude-fable-5.1':     { in: 1000, cached: 25,   write: 1250, out: 5000 },
   'claude-haiku-4.5':     { in: 100,  cached: 10,   write: 125,  out: 500 },
+  'claude-haiku-5.5':     { limit: 100000,
+                            low:  { in: 10, cached: 1, write: 12.5, out: 50 },
+                            high: { in: 50, cached: 5, write: 62.5, out: 250 } },
   'claude-opus-4.7':      { in: 500,  cached: 50,   write: 625,  out: 2500 },
   'claude-opus-4.8':      { in: 500,  cached: 50,   write: 625,  out: 2500 },
   // "Claude Opus 4.8 (fast mode) (preview)": the docs do not give its API id.
