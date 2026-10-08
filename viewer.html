@@ -338,6 +338,7 @@ kbd{font-family:var(--mono);font-size:10.5px;background:var(--panel3);border:1px
     <select id="sessionSel" title="Session"></select>
     <input id="search" type="search" placeholder="Search inside the turns…" style="width:280px">
     <div class="grow"></div>
+    <span id="priceSrc" style="font-size:11px;color:var(--faint)"></span>
     <button class="btn" id="refreshBtn" title="Reload the logs from disk (r)">⟳</button>
     <button class="btn" id="autoBtn" title="Click to change how often the open folder is re-read">Auto refresh: off</button>
     <button class="btn" id="themeBtn" title="Toggle theme">◐</button>
@@ -462,7 +463,11 @@ const bytes = n => n == null ? '\u2014' : n < 1024 ? n + ' B' : n < 1048576 ? (n
  *  so logs recorded while they were offered still add up.
  *
  *  A model missing from here stays out of the total, and the screen says which
- *  ones: an incomplete total presenting itself as complete beats no total. */
+ *  ones: an incomplete total presenting itself as complete beats no total.
+ *
+ *  This is the built-in table, the floor. On load `carregarPrecos` (below)
+ *  overwrites its rows with models.dev's `github-copilot` ones, so a price change
+ *  needs no edit here; what the feed does not list stays as written. */
 const COPILOT_PRICES = {
   'claude-fable-5':       { in: 1000, cached: 100,  write: 1250, out: 5000 },
   'claude-fable-5.1':     { in: 1000, cached: 25,   write: 1250, out: 5000 },
@@ -479,7 +484,7 @@ const COPILOT_PRICES = {
   'claude-sonnet-4':      { in: 300,  cached: 30,   write: 375,  out: 1500 },
   'claude-sonnet-4.6':    { in: 300,  cached: 30,   write: 375,  out: 1500 },
   'claude-sonnet-5':      { in: 200,  cached: 20,   write: 250,  out: 1000 },
-  'claude-sonnet-5.5':    { in: 200,  cached: 20,   write: 250,  out: 1000 },
+  'claude-sonnet-5.5':    { in: 200,  cached: 10,   write: 250,  out: 1000 },
   'gemini-3.5-flash':     { in: 150,  cached: 15,   write: null, out: 900 },
   // 3.6, 3.7 and 3.8 Flash: promotional price, through Dec 31, 2026.
   'gemini-3.6-flash':     { in: 75,   cached: 7.5,  write: null, out: 375 },
@@ -575,6 +580,81 @@ function copilotRates(t) {
   };
 }
 
+/* ---------- the table, kept current ---------- */
+
+/** models.dev lists GitHub Copilot's own resale prices under `github-copilot`:
+ *  dollars per 1M tokens, the same ids as the table, served with CORS open, so
+ *  the page can read it straight from disk or over http. */
+const PRECOS_URL = 'https://models.dev/api.json';
+const PRECOS_CHAVE = 'copilotPrices.v1';
+const PRECOS_TTL = 24 * 3600 * 1000;
+/** Bumped every time the table changes, so what was priced earlier is priced again. */
+let PRICE_VER = 0;
+/** Where the table in use came from, for the line beside the header. */
+const PRECOS = { fonte: 'built-in table', quando: null, linhas: 0 };
+
+/** One models.dev entry as a row of the table, or `null` when it cannot be
+ *  trusted: an entry missing a rate keeps the built-in row instead of a guess. */
+function linhaDe(cost) {
+  const ok = n => Number.isFinite(n) && n >= 0;
+  const cr = usd => Math.round(usd * 1e8) / 1e6;         // dollars → credits, no float tail
+  const faixa = c => {
+    if (!c || !ok(c.input) || !ok(c.output) || !ok(c.cache_read)) return null;
+    return { in: cr(c.input), cached: cr(c.cache_read),
+             write: ok(c.cache_write) ? cr(c.cache_write) : null, out: cr(c.output) };
+  };
+  const low = faixa(cost); if (!low) return null;
+  const t = cost.tiers?.[0];
+  if (!t) return low;
+  const high = faixa(t), limit = t.tier?.size;
+  return high && Number.isFinite(limit) && limit > 0 ? { limit, low, high } : null;
+}
+
+/** Lays models.dev's rows over the table. Rows it lacks stay as they were. */
+function aplicarPrecos(models, quando) {
+  let n = 0;
+  for (const [id, m] of Object.entries(models ?? {})) {
+    const row = linhaDe(m?.cost);
+    if (row) { COPILOT_PRICES[id.toLowerCase()] = row; n++; }
+  }
+  if (!n) return false;
+  Object.assign(PRECOS, { fonte: 'models.dev', quando, linhas: n });
+  PRICE_VER++; derivarCortes(); pintarPrecos();
+  return true;
+}
+
+function pintarPrecos() {
+  const el = $('#priceSrc'); if (!el) return;
+  el.textContent = PRECOS.quando
+    ? `Copilot prices: models.dev, ${new Date(PRECOS.quando).toLocaleDateString()}`
+    : 'Copilot prices: built-in';
+  el.title = PRECOS.quando
+    ? `${PRECOS.linhas} rows read from ${PRECOS_URL} (github-copilot), refreshed daily. Models it does not list keep the built-in price.`
+    : `Could not read ${PRECOS_URL}; using the table written in this file.`;
+}
+
+/** The cached copy goes on at once and synchronously, so a folder opened a moment
+ *  later is already priced by it; the network only runs when the copy is a day
+ *  old or absent. Any failure leaves the table as it is. */
+async function carregarPrecos() {
+  let cache = null;
+  try { cache = JSON.parse(localStorage.getItem(PRECOS_CHAVE)); } catch {}
+  if (cache?.models) aplicarPrecos(cache.models, cache.t);
+  else pintarPrecos();
+  if (cache?.t && Date.now() - cache.t < PRECOS_TTL) return;
+  try {
+    const r = await fetch(PRECOS_URL, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const models = (await r.json())['github-copilot']?.models;
+    const t = Date.now();
+    if (!aplicarPrecos(models, t)) throw new Error('no github-copilot prices in the feed');
+    try { localStorage.setItem(PRECOS_CHAVE, JSON.stringify({ t, models })); } catch {}
+    if (S.sessions.length) render();                     // data already open: show it repriced
+  } catch (e) {
+    console.warn('could not refresh the Copilot prices:', e);
+  }
+}
+
 /* =========================================================================
    Cost of a turn
    =========================================================================
@@ -610,9 +690,10 @@ const RATE_FIELDS = ['input', 'cache_read', 'cache_write', 'output'];
  *  the components the catalog did not bring and another source covered: they go
  *  into the total, but the screen has to say they went in estimated. */
 function tarifas(t) {
-  if ('_tarifas' in t) return t._tarifas;
+  if (t._tarifasVer === PRICE_VER) return t._tarifas;
   const out = calcTarifas(t);
-  Object.defineProperty(t, '_tarifas', { value: out, enumerable: false });
+  Object.defineProperty(t, '_tarifas', { value: out, enumerable: false, configurable: true });
+  Object.defineProperty(t, '_tarifasVer', { value: PRICE_VER, enumerable: false, configurable: true });
   return out;
 }
 
@@ -1524,13 +1605,18 @@ function pastaDe(s) {
  *  turns throws away — so the sums are split at every cut-off, and each part is
  *  priced on its own side. The total comes out exactly what the turns add up to
  *  once opened. */
-const CORTES = [...new Set(Object.values(COPILOT_PRICES).map(r => r.limit).filter(Boolean))].sort((a, b) => a - b);
+let CORTES, GRUPO_SQL;
 const PROMPT_SQL = 'p.input + p.cache_read + p.cache_write';
-const GRUPO_SQL = `p.provider, p.model,
+/** Both come from the table, so they are rebuilt whenever the table is. */
+function derivarCortes() {
+  CORTES = [...new Set(Object.values(COPILOT_PRICES).map(r => r.limit).filter(Boolean))].sort((a, b) => a - b);
+  GRUPO_SQL = `p.provider, p.model,
   CASE ${CORTES.map((c, i) => `WHEN ${PROMPT_SQL} > ${c} THEN ${i + 1}`).reverse().join(' ')} ELSE 0 END AS banda,
   sum(p.input) AS input, sum(p.cache_read) AS cache_read, sum(p.cache_write) AS cache_write,
   p.cost > 0 AS cobrado,
   sum(p.output + p.reasoning) AS output, sum(p.reasoning) AS reasoning, sum(p.cost) AS cost`;
+}
+derivarCortes();
 
 /** What a group of turns cost, by the rule `custo` applies to each of them:
  *  on Copilot, the bill it sent when there is one and the credit table where it
@@ -2492,11 +2578,13 @@ async function reopen(dir) {
     alert('That folder cannot be read any more. Pick it again.');
   }
 }
+const precosPronto = carregarPrecos();
 offerLast();
 
 // auto-load when served over http
 (async function auto() {
   if (!location.protocol.startsWith('http')) return;
+  await precosPronto;                          // only waits on a first, cache-less run
   let files = null;
   try { files = await collectHttp(); }
   catch (e) { console.warn('auto-load unavailable:', e); return; }
